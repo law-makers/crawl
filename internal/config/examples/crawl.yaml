@@ -1,0 +1,13 @@
+# Example configuration for Crawl
+log_level: info
+json_log: false
+
+http_timeout: 30s
+user_agent: "Crawl/1.0 (https://github.com/law-makers/crawl)"
+
+cache_ttl: 5m
+cache_max_size_bytes: 104857600
+
+browser_pool_size: 3
+browser_headless: true
+chrome_path: ""

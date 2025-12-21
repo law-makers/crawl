@@ -32,8 +32,8 @@ func TestStaticScraper_Fetch_BasicHTML(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create scraper
-	scraper := NewStaticScraper()
+	// Create scraper using test helper
+	scraper := NewTestStaticScraper()
 
 	// Test fetch
 	opts := models.RequestOptions{
@@ -86,7 +86,7 @@ func TestStaticScraper_Fetch_WithSelector(t *testing.T) {
 	}))
 	defer server.Close()
 
-	scraper := NewStaticScraper()
+	scraper := NewTestStaticScraper()
 
 	// Test with selector
 	opts := models.RequestOptions{
@@ -108,7 +108,7 @@ func TestStaticScraper_Fetch_WithSelector(t *testing.T) {
 }
 
 func TestStaticScraper_Fetch_InvalidURL(t *testing.T) {
-	scraper := NewStaticScraper()
+	scraper := NewTestStaticScraper()
 
 	opts := models.RequestOptions{
 		URL:      "http://invalid-url-that-does-not-exist-12345.com",
@@ -125,7 +125,7 @@ func TestStaticScraper_Fetch_InvalidURL(t *testing.T) {
 }
 
 func TestStaticScraper_Name(t *testing.T) {
-	scraper := NewStaticScraper()
+	scraper := NewTestStaticScraper()
 
 	if scraper.Name() != "StaticScraper" {
 		t.Errorf("Expected name 'StaticScraper', got '%s'", scraper.Name())
@@ -150,7 +150,7 @@ func TestStaticScraper_Fetch_CustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	scraper := NewStaticScraper()
+	scraper := NewTestStaticScraper()
 
 	opts := models.RequestOptions{
 		URL:      server.URL,

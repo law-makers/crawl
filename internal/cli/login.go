@@ -31,11 +31,8 @@ via web interface on a forwarded port.`,
 	Example: `  # Login to GitHub and save as "github-session"
   $ crawl login https://github.com/login --session=github-session --wait="#dashboard"
 
-  # Login to Instagram
-  $ crawl login https://instagram.com --session=instagram --wait="nav[role='navigation']"
-
   # Login in dev container with remote debugging
-  $ crawl login https://instagram.com --session=instagram --remote-debug=9222
+  $ crawl login https://example.com/login --session=example --remote-debug=9222
 
   # Login without waiting for specific element (manual confirmation)
   $ crawl login https://example.com/login --session=example

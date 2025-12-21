@@ -6,13 +6,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/law-makers/crawl/internal/ratelimit"
 	"github.com/rs/zerolog/log"
+	"github.com/schollz/progressbar/v3"
 )
 
 // WorkerPool manages concurrent downloads using a worker pool pattern
 type WorkerPool struct {
 	downloader  *Downloader
 	concurrency int
+	rateLimiter *ratelimit.DomainLimiter
 }
 
 // NewWorkerPool creates a new worker pool with specified concurrency
@@ -27,6 +30,7 @@ func NewWorkerPool(concurrency int, timeout time.Duration, userAgent string) *Wo
 	return &WorkerPool{
 		downloader:  NewDownloader(timeout, userAgent),
 		concurrency: concurrency,
+		rateLimiter: ratelimit.NewDomainLimiter(5.0, 10), // 5 req/sec per domain
 	}
 }
 
@@ -36,6 +40,25 @@ func (wp *WorkerPool) DownloadBatch(ctx context.Context, urls []string, opts Dow
 		return []*DownloadResult{}
 	}
 
+	// Create progress bar
+	bar := progressbar.NewOptions(len(urls),
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionShowCount(),
+		progressbar.OptionShowIts(),
+		progressbar.OptionSetItsString("files"),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+	)
+
 	// Create channels for job distribution
 	jobs := make(chan string, len(urls))
 	results := make(chan *DownloadResult, len(urls))
@@ -44,7 +67,7 @@ func (wp *WorkerPool) DownloadBatch(ctx context.Context, urls []string, opts Dow
 	var wg sync.WaitGroup
 	for w := 1; w <= wp.concurrency; w++ {
 		wg.Add(1)
-		go wp.worker(ctx, w, jobs, results, opts, &wg)
+		go wp.worker(ctx, w, jobs, results, opts, &wg, bar)
 	}
 
 	// Send jobs to workers
@@ -67,12 +90,23 @@ func (wp *WorkerPool) DownloadBatch(ctx context.Context, urls []string, opts Dow
 		allResults = append(allResults, result)
 	}
 
+	// Finish progress bar
+	bar.Finish()
+
 	return allResults
 }
 
 // worker processes download jobs from the jobs channel
-func (wp *WorkerPool) worker(ctx context.Context, id int, jobs <-chan string, results chan<- *DownloadResult, opts DownloadOptions, wg *sync.WaitGroup) {
+func (wp *WorkerPool) worker(ctx context.Context, id int, jobs <-chan string, results chan<- *DownloadResult, opts DownloadOptions, wg *sync.WaitGroup, bar *progressbar.ProgressBar) {
 	defer wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Int("worker_id", id).Interface("panic", r).Msg("Worker panicked")
+			if bar != nil {
+				bar.Add(1) // Ensure progress continues even on panic
+			}
+		}
+	}()
 
 	log.Debug().Int("worker_id", id).Msg("Worker started")
 
@@ -90,8 +124,20 @@ func (wp *WorkerPool) worker(ctx context.Context, id int, jobs <-chan string, re
 			Str("url", url).
 			Msg("Worker processing download")
 
+		// Apply rate limiting before download
+		if wp.rateLimiter != nil {
+			if err := wp.rateLimiter.Wait(ctx, url); err != nil {
+				log.Warn().Err(err).Str("url", url).Msg("Rate limit error")
+			}
+		}
+
 		// Download the file
 		result := wp.downloader.Download(ctx, url, opts)
+
+		// Update progress bar
+		if bar != nil {
+			bar.Add(1)
+		}
 
 		// Send result back
 		select {

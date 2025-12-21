@@ -34,7 +34,7 @@ Steps:
 4. Copy the cookies
 5. Use this command to import them`,
 	Example: `  # Import cookies interactively
-  crawl sessions import instagram --url=https://instagram.com
+  crawl sessions import mysite --url=https://example.com
 
   # Import from Netscape/curl format file
   crawl sessions import github --url=https://github.com --format=netscape < cookies.txt
@@ -130,8 +130,6 @@ func importInteractive() ([]auth.Cookie, error) {
 	fmt.Println("3. Go to: Application → Storage → Cookies")
 	fmt.Println("4. For each important cookie, copy the Name and Value")
 	fmt.Println()
-	fmt.Println("💡 TIP: For Instagram, you need BOTH: sessionid AND csrftoken")
-	fmt.Println()
 
 	var cookies []auth.Cookie
 	scanner := bufio.NewScanner(os.Stdin)
@@ -139,9 +137,7 @@ func importInteractive() ([]auth.Cookie, error) {
 	// Extract domain from URL
 	domain := ""
 	if importURL != "" {
-		if strings.Contains(importURL, "instagram") {
-			domain = ".instagram.com"
-		} else if strings.Contains(importURL, "github") {
+		if strings.Contains(importURL, "github") {
 			domain = ".github.com"
 		} else if strings.Contains(importURL, "twitter") || strings.Contains(importURL, "x.com") {
 			domain = ".twitter.com"
@@ -154,23 +150,8 @@ func importInteractive() ([]auth.Cookie, error) {
 		}
 	}
 
-	// Track which required cookies we've added for Instagram
-	hasSessionId := false
-	hasCsrfToken := false
-
 	for {
 		fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-
-		// Show reminder for Instagram
-		if strings.Contains(importURL, "instagram") {
-			if !hasSessionId {
-				fmt.Println("⚠️  Still need: sessionid")
-			}
-			if !hasCsrfToken {
-				fmt.Println("⚠️  Still need: csrftoken")
-			}
-		}
-
 		fmt.Print("\nCookie Name (or press Enter to finish): ")
 		if !scanner.Scan() {
 			break
@@ -212,33 +193,12 @@ func importInteractive() ([]auth.Cookie, error) {
 
 		cookies = append(cookies, cookie)
 		fmt.Printf("✅ Added: %s (domain: %s)\n", cookie.Name, cookie.Domain)
-
-		// Track Instagram cookies
-		if name == "sessionid" {
-			hasSessionId = true
-		}
-		if name == "csrftoken" {
-			hasCsrfToken = true
-		}
 	}
 
 	if len(cookies) == 0 {
 		fmt.Println("\n⚠️  No cookies added")
 	} else {
 		fmt.Printf("\n✅ Total cookies added: %d\n", len(cookies))
-
-		// Warn if Instagram session is incomplete
-		if strings.Contains(importURL, "instagram") {
-			if !hasSessionId || !hasCsrfToken {
-				fmt.Println("\n⚠️  WARNING: Instagram authentication may not work properly!")
-				if !hasSessionId {
-					fmt.Println("   Missing: sessionid (required)")
-				}
-				if !hasCsrfToken {
-					fmt.Println("   Missing: csrftoken (required)")
-				}
-			}
-		}
 	}
 
 	return cookies, nil

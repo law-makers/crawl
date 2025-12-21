@@ -28,8 +28,8 @@ func TestDynamicScraper_Fetch_BasicHTML(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create scraper
-	scraper := NewDynamicScraper()
+	// Create scraper using test helper
+	scraper := NewTestDynamicScraper()
 
 	// Test fetch
 	opts := models.RequestOptions{
@@ -77,7 +77,7 @@ func TestDynamicScraper_Fetch_JavaScript(t *testing.T) {
 	}))
 	defer server.Close()
 
-	scraper := NewDynamicScraper()
+	scraper := NewTestDynamicScraper()
 
 	opts := models.RequestOptions{
 		URL:      server.URL,
@@ -116,7 +116,7 @@ func TestDynamicScraper_Fetch_WithSelector(t *testing.T) {
 	}))
 	defer server.Close()
 
-	scraper := NewDynamicScraper()
+	scraper := NewTestDynamicScraper()
 
 	opts := models.RequestOptions{
 		URL:      server.URL,
@@ -137,7 +137,7 @@ func TestDynamicScraper_Fetch_WithSelector(t *testing.T) {
 }
 
 func TestDynamicScraper_Name(t *testing.T) {
-	scraper := NewDynamicScraper()
+	scraper := NewTestDynamicScraper()
 
 	if scraper.Name() != "DynamicScraper" {
 		t.Errorf("Expected name 'DynamicScraper', got '%s'", scraper.Name())
@@ -145,7 +145,7 @@ func TestDynamicScraper_Name(t *testing.T) {
 }
 
 func TestDynamicScraper_Fetch_InvalidURL(t *testing.T) {
-	scraper := NewDynamicScraper()
+	scraper := NewTestDynamicScraper()
 
 	opts := models.RequestOptions{
 		URL:      "http://invalid-url-that-does-not-exist-99999.com",

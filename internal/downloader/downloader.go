@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/law-makers/crawl/internal/retry"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,6 +26,29 @@ type DownloadResult struct {
 	Error     error
 	StartTime time.Time
 	Duration  time.Duration
+}
+
+// DownloadError provides detailed context about download failures
+type DownloadError struct {
+	URL         string
+	StatusCode  int
+	Message     string
+	BodySnippet string // First 500 chars
+	Underlying  error
+}
+
+func (e *DownloadError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("download failed for %s: %s (status: %d)", e.URL, e.Message, e.StatusCode)
+	}
+	return fmt.Sprintf("download failed for %s: %s", e.URL, e.Message)
+}
+
+func (e *DownloadError) Unwrap() error { return e.Underlying }
+
+// GetStatusCode returns the HTTP status code if applicable
+func (e *DownloadError) GetStatusCode() int {
+	return e.StatusCode
 }
 
 // DownloadOptions configures the download behavior
@@ -40,6 +65,26 @@ type Downloader struct {
 	client    *http.Client
 	userAgent string
 }
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 32*1024) // 32KB
+		return &b
+	},
+}
+
+var filenameReplacer = strings.NewReplacer(
+	"/", "_",
+	"\\", "_",
+	"..", "_",
+	":", "_",
+	"*", "_",
+	"?", "_",
+	"\"", "_",
+	"<", "_",
+	">", "_",
+	"|", "_",
+)
 
 // NewDownloader creates a new Downloader instance
 func NewDownloader(timeout time.Duration, userAgent string) *Downloader {
@@ -70,37 +115,68 @@ func (d *Downloader) Download(ctx context.Context, fileURL string, opts Download
 		Success:   false,
 	}
 
+	// Wrap download with retry logic
+	retryConfig := retry.Config{
+		MaxAttempts:    3,
+		InitialBackoff: 1 * time.Second,
+		MaxBackoff:     10 * time.Second,
+		Multiplier:     2.0,
+		RetryableStatusCodes: []int{
+			http.StatusTooManyRequests,
+			http.StatusInternalServerError,
+			http.StatusBadGateway,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout,
+		},
+	}
+
+	err := retry.WithRetry(ctx, retryConfig, func() error {
+		return d.downloadOnce(ctx, fileURL, opts, result)
+	})
+
+	if err != nil {
+		result.Error = err
+		result.Success = false
+	}
+
+	result.Duration = time.Since(result.StartTime)
+	return result
+}
+
+// downloadOnce performs a single download attempt
+func (d *Downloader) downloadOnce(ctx context.Context, fileURL string, opts DownloadOptions, result *DownloadResult) error {
 	// Validate URL
-	if _, err := url.Parse(fileURL); err != nil {
-		result.Error = fmt.Errorf("invalid URL: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		return result
+	u, err := url.Parse(fileURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
 	}
 
 	// Create output directory
 	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
-		result.Error = fmt.Errorf("failed to create output directory: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		return result
+		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Determine filename
 	filename := opts.Filename
 	if filename == "" {
-		filename = sanitizeFilename(fileURL)
+		filename = sanitizeFilename(fileURL, u)
 	} else {
-		filename = sanitizeFilename(filename)
+		filename = sanitizeFilename(filename, nil)
 	}
 
 	filePath := filepath.Join(opts.OutputDir, filename)
 	result.FilePath = filePath
 
+	// Check for existing file to support resume
+	var startByte int64
+	if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+		startByte = info.Size()
+	}
+
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to create request: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		return result
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set headers
@@ -109,79 +185,118 @@ func (d *Downloader) Download(ctx context.Context, fileURL string, opts Download
 		req.Header.Set(key, value)
 	}
 
+	// Add Range header if we have existing data
+	if startByte > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", startByte))
+	}
+
 	// Execute request
 	resp, err := d.client.Do(req)
 	if err != nil {
-		result.Error = fmt.Errorf("request failed: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		return result
+		return &DownloadError{
+			URL:        fileURL,
+			Message:    "request failed",
+			Underlying: err,
+		}
 	}
 	defer resp.Body.Close()
 
-	// Check status
-	if resp.StatusCode != http.StatusOK {
-		result.Error = fmt.Errorf("bad status: %d %s", resp.StatusCode, resp.Status)
-		result.Duration = time.Since(result.StartTime)
-		return result
+	// Handle response status
+	var outFile *os.File
+	var appendMode bool
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Server doesn't support range or file didn't exist, overwrite
+		outFile, err = os.Create(filePath)
+		appendMode = false
+	case http.StatusPartialContent:
+		// Server supports range, append
+		outFile, err = os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+		appendMode = true
+	case http.StatusRequestedRangeNotSatisfiable:
+		// File is likely already complete
+		result.Size = startByte
+		result.Success = true
+		return nil
+	default:
+		// Read snippet of body for context
+		snippet := make([]byte, 500)
+		n, _ := io.ReadFull(resp.Body, snippet)
+
+		return &DownloadError{
+			URL:         fileURL,
+			StatusCode:  resp.StatusCode,
+			Message:     resp.Status,
+			BodySnippet: string(snippet[:n]),
+		}
 	}
 
-	// Create file
-	outFile, err := os.Create(filePath)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to create file: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		return result
+		return &DownloadError{
+			URL:        fileURL,
+			Message:    "failed to open file",
+			Underlying: err,
+		}
 	}
 	defer outFile.Close()
 
 	// Stream to disk
-	bytesWritten, err := io.Copy(outFile, resp.Body)
+	buf := bufferPool.Get().(*[]byte)
+	defer bufferPool.Put(buf)
+	bytesWritten, err := io.CopyBuffer(outFile, resp.Body, *buf)
 	if err != nil {
-		result.Error = fmt.Errorf("failed to write file: %w", err)
-		result.Duration = time.Since(result.StartTime)
-		os.Remove(filePath)
-		return result
+		return &DownloadError{
+			URL:        fileURL,
+			Message:    "failed to write file",
+			Underlying: err,
+		}
 	}
 
 	result.Size = bytesWritten
+	if appendMode {
+		result.Size += startByte
+	}
 	result.Success = true
-	result.Duration = time.Since(result.StartTime)
 
 	log.Debug().
 		Str("url", fileURL).
 		Str("file", filePath).
-		Int64("bytes", bytesWritten).
-		Dur("duration", result.Duration).
+		Int64("bytes", result.Size).
 		Msg("Download completed")
 
-	return result
+	return nil
 }
 
 // sanitizeFilename prevents path traversal attacks
-func sanitizeFilename(input string) string {
+func sanitizeFilename(input string, u *url.URL) string {
 	// Extract filename from URL
 	var queryHash string
-	if u, err := url.Parse(input); err == nil && u.Host != "" {
-		parts := strings.Split(u.Path, "/")
-		if len(parts) > 0 {
-			input = parts[len(parts)-1]
+
+	if u != nil {
+		if u.Host != "" {
+			parts := strings.Split(u.Path, "/")
+			if len(parts) > 0 {
+				input = parts[len(parts)-1]
+			}
+			if u.RawQuery != "" {
+				queryHash = "_" + hashString(u.RawQuery)
+			}
 		}
-		if u.RawQuery != "" {
-			queryHash = "_" + hashString(u.RawQuery)
+	} else {
+		if parsed, err := url.Parse(input); err == nil && parsed.Host != "" {
+			parts := strings.Split(parsed.Path, "/")
+			if len(parts) > 0 {
+				input = parts[len(parts)-1]
+			}
+			if parsed.RawQuery != "" {
+				queryHash = "_" + hashString(parsed.RawQuery)
+			}
 		}
 	}
 
 	// Remove dangerous characters
-	input = strings.ReplaceAll(input, "/", "_")
-	input = strings.ReplaceAll(input, "\\", "_")
-	input = strings.ReplaceAll(input, "..", "_")
-	input = strings.ReplaceAll(input, ":", "_")
-	input = strings.ReplaceAll(input, "*", "_")
-	input = strings.ReplaceAll(input, "?", "_")
-	input = strings.ReplaceAll(input, "\"", "_")
-	input = strings.ReplaceAll(input, "<", "_")
-	input = strings.ReplaceAll(input, ">", "_")
-	input = strings.ReplaceAll(input, "|", "_")
+	input = filenameReplacer.Replace(input)
 
 	input = strings.TrimSpace(input)
 	input = strings.Trim(input, ".")

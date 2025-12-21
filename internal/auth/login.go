@@ -4,6 +4,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -39,6 +40,15 @@ func InteractiveLogin(opts LoginOptions) (*SessionData, error) {
 		opts.Timeout = 5 * time.Minute // Default 5 minutes
 	}
 
+	// Check if DISPLAY is available (required for visible browser)
+	display := os.Getenv("DISPLAY")
+	if display == "" {
+		return nil, fmt.Errorf("interactive login requires a display server (DISPLAY not set)\n\n" +
+			"💡 In headless environments (Codespaces, cloud IDEs), use:\n" +
+			"   crawl sessions import <name> --url=<url>\n\n" +
+			"   This allows you to import cookies from your browser's DevTools.")
+	}
+
 	log.Info().
 		Str("session", opts.SessionName).
 		Str("url", opts.URL).
@@ -57,6 +67,7 @@ func InteractiveLogin(opts LoginOptions) (*SessionData, error) {
 		chromedp.Flag("disable-gpu", false),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("log-level", "3"),
 		chromedp.WindowSize(1280, 720),
 	}
 

@@ -103,11 +103,6 @@ func runMedia(cmd *cobra.Command, args []string) error {
 	switch strings.ToLower(mode) {
 	case "auto":
 		scraperMode = models.ModeAuto
-		// Auto-detect Instagram - always use SPA mode
-		if strings.Contains(pageURL, "instagram.com") {
-			scraperMode = models.ModeSPA
-			fmt.Println("\n🔍 Instagram detected - using SPA mode...")
-		}
 	case "static":
 		scraperMode = models.ModeStatic
 	case "spa":
@@ -125,12 +120,15 @@ func runMedia(cmd *cobra.Command, args []string) error {
 
 	// Create scraper to fetch the page
 	var scraper engine.Scraper
-	switch scraperMode {
-	case models.ModeStatic, models.ModeAuto:
-		scraper = engine.NewStaticScraper()
-	case models.ModeSPA:
-		scraper = engine.NewDynamicScraper()
+
+	// Get app from context
+	appCtx := GetApp()
+	if appCtx == nil {
+		return fmt.Errorf("application not initialized")
 	}
+
+	// Use the scraper from the app
+	scraper = appCtx.Scraper
 
 	// Fetch the page
 	opts := models.RequestOptions{
@@ -162,8 +160,7 @@ func runMedia(cmd *cobra.Command, args []string) error {
 	if len(mediaURLs) == 0 {
 		log.Debug().Msg("No media files found on this page")
 		fmt.Println("\n❌ No media files found.")
-		fmt.Println("\n💡 TIP: Instagram requires SPA mode. Try:")
-		fmt.Printf("   ./crawl media %s --session=instagram --mode=spa\n\n", pageURL)
+		fmt.Println("\n💡 TIP: Try using --mode=spa for JavaScript-heavy sites")
 		return nil
 	}
 

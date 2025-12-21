@@ -28,19 +28,24 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+
 	var urls []string
 
 	// Extract images
 	if mediaType == MediaTypeImage || mediaType == MediaTypeAll {
 		doc.Find("img").Each(func(i int, s *goquery.Selection) {
 			if src, exists := s.Attr("src"); exists {
-				if resolved := resolveURL(baseURL, src); resolved != "" {
+				if resolved := resolveURL(base, src); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
 			// Also check srcset for high-res images
 			if srcset, exists := s.Attr("srcset"); exists {
-				srcsetURLs := parseSrcset(srcset, baseURL)
+				srcsetURLs := parseSrcset(srcset, base)
 				urls = append(urls, srcsetURLs...)
 			}
 		})
@@ -48,7 +53,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 		// Also check Open Graph images
 		doc.Find("meta[property='og:image']").Each(func(i int, s *goquery.Selection) {
 			if content, exists := s.Attr("content"); exists {
-				if resolved := resolveURL(baseURL, content); resolved != "" {
+				if resolved := resolveURL(base, content); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
@@ -60,7 +65,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 		// Standard <video> tags
 		doc.Find("video source").Each(func(i int, s *goquery.Selection) {
 			if src, exists := s.Attr("src"); exists {
-				if resolved := resolveURL(baseURL, src); resolved != "" {
+				if resolved := resolveURL(base, src); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
@@ -69,7 +74,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 		// Direct <video> src
 		doc.Find("video").Each(func(i int, s *goquery.Selection) {
 			if src, exists := s.Attr("src"); exists {
-				if resolved := resolveURL(baseURL, src); resolved != "" {
+				if resolved := resolveURL(base, src); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
@@ -78,13 +83,13 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 		// Open Graph videos
 		doc.Find("meta[property='og:video'], meta[property='og:video:url']").Each(func(i int, s *goquery.Selection) {
 			if content, exists := s.Attr("content"); exists {
-				if resolved := resolveURL(baseURL, content); resolved != "" {
+				if resolved := resolveURL(base, content); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
 		})
 
-		// Try to extract from JSON blobs (TikTok, Instagram, etc.)
+		// Try to extract from JSON blobs
 		urls = append(urls, extractVideosFromJSON(html, baseURL)...)
 	}
 
@@ -92,7 +97,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 	if mediaType == MediaTypeAudio || mediaType == MediaTypeAll {
 		doc.Find("audio source").Each(func(i int, s *goquery.Selection) {
 			if src, exists := s.Attr("src"); exists {
-				if resolved := resolveURL(baseURL, src); resolved != "" {
+				if resolved := resolveURL(base, src); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
@@ -100,7 +105,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 
 		doc.Find("audio").Each(func(i int, s *goquery.Selection) {
 			if src, exists := s.Attr("src"); exists {
-				if resolved := resolveURL(baseURL, src); resolved != "" {
+				if resolved := resolveURL(base, src); resolved != "" {
 					urls = append(urls, resolved)
 				}
 			}
@@ -121,7 +126,7 @@ func ExtractMedia(html string, baseURL string, mediaType MediaType) ([]string, e
 }
 
 // resolveURL resolves relative URLs against the base URL
-func resolveURL(baseURL, href string) string {
+func resolveURL(base *url.URL, href string) string {
 	// Skip data URLs and empty strings
 	if href == "" || strings.HasPrefix(href, "data:") {
 		return ""
@@ -130,12 +135,6 @@ func resolveURL(baseURL, href string) string {
 	// If already absolute, return as-is
 	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
 		return href
-	}
-
-	// Parse base URL
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return ""
 	}
 
 	// Parse relative URL
@@ -149,14 +148,14 @@ func resolveURL(baseURL, href string) string {
 }
 
 // parseSrcset parses the srcset attribute and extracts URLs
-func parseSrcset(srcset string, baseURL string) []string {
+func parseSrcset(srcset string, base *url.URL) []string {
 	var urls []string
 	parts := strings.Split(srcset, ",")
 	for _, part := range parts {
 		// Each part is like "image.jpg 2x" or "image.jpg 1024w"
 		tokens := strings.Fields(strings.TrimSpace(part))
 		if len(tokens) > 0 {
-			if resolved := resolveURL(baseURL, tokens[0]); resolved != "" {
+			if resolved := resolveURL(base, tokens[0]); resolved != "" {
 				urls = append(urls, resolved)
 			}
 		}
@@ -164,19 +163,20 @@ func parseSrcset(srcset string, baseURL string) []string {
 	return urls
 }
 
-// extractVideosFromJSON looks for video URLs in JSON blobs (TikTok, Instagram, etc.)
+var (
+	jsonPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>`),
+		regexp.MustCompile(`<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`),
+		regexp.MustCompile(`window\.__INITIAL_STATE__\s*=\s*({.*?});`),
+	}
+	videoURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+\.(?:mp4|m3u8|webm|mov)(?:\?[^\s"'<>]*)?`)
+)
+
+// extractVideosFromJSON looks for video URLs in JSON blobs.
 func extractVideosFromJSON(html string, _ string) []string {
 	var urls []string
 
-	// Look for common JSON patterns
-	patterns := []string{
-		`<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>`,
-		`<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>`,
-		`window\.__INITIAL_STATE__\s*=\s*({.*?});`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
+	for _, re := range jsonPatterns {
 		matches := re.FindAllStringSubmatch(html, -1)
 		for _, match := range matches {
 			if len(match) > 1 {
@@ -196,8 +196,7 @@ func extractURLsFromJSON(jsonData string) []string {
 	var urls []string
 
 	// Look for common video URL patterns
-	urlPattern := regexp.MustCompile(`https?://[^\s"'<>]+\.(?:mp4|m3u8|webm|mov)(?:\?[^\s"'<>]*)?`)
-	matches := urlPattern.FindAllString(jsonData, -1)
+	matches := videoURLPattern.FindAllString(jsonData, -1)
 	urls = append(urls, matches...)
 
 	// Try to parse as JSON and look for video-related fields
@@ -230,6 +229,56 @@ func findVideoURLsInJSON(data interface{}, urls *[]string) {
 	}
 }
 
+// detectMediaType determines the media type from URL and optional Content-Type
+func detectMediaType(urlStr string, contentType string) MediaType {
+	// Check Content-Type header first (more reliable)
+	if contentType != "" {
+		if strings.HasPrefix(contentType, "image/") {
+			return MediaTypeImage
+		}
+		if strings.HasPrefix(contentType, "video/") {
+			return MediaTypeVideo
+		}
+		if strings.HasPrefix(contentType, "audio/") {
+			return MediaTypeAudio
+		}
+	}
+
+	// Fallback to extension
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return MediaTypeAll // Unknown
+	}
+
+	path := strings.ToLower(u.Path)
+	if hasExtension(path, imageExtensions) {
+		return MediaTypeImage
+	}
+	if hasExtension(path, videoExtensions) {
+		return MediaTypeVideo
+	}
+	if hasExtension(path, audioExtensions) {
+		return MediaTypeAudio
+	}
+
+	return MediaTypeAll
+}
+
+var (
+	imageExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tiff", ".tif"}
+	videoExtensions = []string{".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".m3u8", ".ts", ".wmv"}
+	audioExtensions = []string{".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a", ".wma"}
+)
+
+func hasExtension(path string, extensions []string) bool {
+	for _, ext := range extensions {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // isValidMediaURL checks if a URL looks like a valid media URL
 func isValidMediaURL(urlStr string) bool {
 	// Must be HTTP/HTTPS
@@ -237,22 +286,22 @@ func isValidMediaURL(urlStr string) bool {
 		return false
 	}
 
-	// Parse URL
+	// Check if detectMediaType finds a specific type
+	if detectMediaType(urlStr, "") != MediaTypeAll {
+		return true
+	}
+
+	// Parse URL for further checks
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return false
 	}
 
-	// Check for common media file extensions
-	path := strings.ToLower(u.Path)
-	mediaExtensions := []string{
-		".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp",
-		".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".m3u8",
-		".mp3", ".wav", ".ogg", ".aac", ".flac",
-	}
-
-	for _, ext := range mediaExtensions {
-		if strings.Contains(path, ext) {
+	// Check query parameters for format indicators
+	if u.RawQuery != "" {
+		query := strings.ToLower(u.RawQuery)
+		if strings.Contains(query, "format=jpg") || strings.Contains(query, "format=png") ||
+			strings.Contains(query, "type=image") || strings.Contains(query, "type=video") {
 			return true
 		}
 	}

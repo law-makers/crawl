@@ -11,6 +11,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/law-makers/crawl/internal/auth"
+	"github.com/law-makers/crawl/internal/cache"
+	"github.com/law-makers/crawl/internal/ratelimit"
 	"github.com/law-makers/crawl/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -18,26 +20,21 @@ import (
 // StaticScraper implements the Scraper interface for static HTML pages
 // It uses raw HTTP requests and goquery for parsing - extremely fast
 type StaticScraper struct {
-	client *http.Client
+	cache     cache.Cache
+	limiter   ratelimit.RateLimiter
+	client    *http.Client
+	timeout   time.Duration
+	userAgent string
 }
 
-// NewStaticScraper creates a new StaticScraper with optimized HTTP client
-func NewStaticScraper() *StaticScraper {
-	// Configure HTTP client with Keep-Alive for connection reuse
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
-
+// NewStaticScraper creates a new StaticScraper with dependency injection
+func NewStaticScraper(c cache.Cache, lim ratelimit.RateLimiter, client *http.Client, timeout time.Duration, ua string) *StaticScraper {
 	return &StaticScraper{
-		client: client,
+		cache:     c,
+		limiter:   lim,
+		client:    client,
+		timeout:   timeout,
+		userAgent: ua,
 	}
 }
 
@@ -46,8 +43,19 @@ func (s *StaticScraper) Name() string {
 	return "StaticScraper"
 }
 
+// FetchWithDoc retrieves and parses a static HTML page, returning both data and document
+func (s *StaticScraper) FetchWithDoc(opts models.RequestOptions) (*models.PageData, *goquery.Document, error) {
+	data, doc, err := s.fetch(opts)
+	return data, doc, err
+}
+
 // Fetch retrieves and parses a static HTML page
 func (s *StaticScraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
+	data, _, err := s.fetch(opts)
+	return data, err
+}
+
+func (s *StaticScraper) fetch(opts models.RequestOptions) (*models.PageData, *goquery.Document, error) {
 	start := time.Now()
 
 	log.Debug().
@@ -98,7 +106,7 @@ func (s *StaticScraper) Fetch(opts models.RequestOptions) (*models.PageData, err
 	// Create request
 	req, err := http.NewRequest("GET", opts.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set default headers
@@ -119,14 +127,14 @@ func (s *StaticScraper) Fetch(opts models.RequestOptions) (*models.PageData, err
 	// Make request
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch URL: %w", err)
+		return nil, nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Parse HTML with goquery
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse HTML: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
 	responseTime := time.Since(start).Milliseconds()
@@ -210,5 +218,5 @@ func (s *StaticScraper) Fetch(opts models.RequestOptions) (*models.PageData, err
 		Int("images", len(pageData.Images)).
 		Msg("Fetch completed")
 
-	return pageData, nil
+	return pageData, doc, nil
 }

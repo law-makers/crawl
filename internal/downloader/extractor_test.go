@@ -88,3 +88,15 @@ func TestIsValidMediaURL(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkExtractVideosFromJSON(b *testing.B) {
+	html := `
+	<script id="__NEXT_DATA__" type="application/json">
+		{"props":{"pageProps":{"video":{"url":"https://example.com/video.mp4"}}}}
+	</script>
+	`
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		extractVideosFromJSON(html, "")
+	}
+}

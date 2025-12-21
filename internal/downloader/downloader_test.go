@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ func TestSanitizeFilename_Security(t *testing.T) {
 
 	for _, input := range dangerous {
 		t.Run(input, func(t *testing.T) {
-			result := sanitizeFilename(input)
+			result := sanitizeFilename(input, nil)
 			if strings.Contains(result, "/") || strings.Contains(result, "\\") {
 				t.Errorf("Sanitized filename contains path separator: %q", result)
 			}
@@ -94,5 +95,15 @@ func TestWorkerPool_Concurrency(t *testing.T) {
 
 	if successCount != len(urls) {
 		t.Errorf("Not all downloads succeeded: %d/%d", successCount, len(urls))
+	}
+}
+
+func BenchmarkSanitizeFilename(b *testing.B) {
+	input := "https://example.com/path/to/file.mp4?query=param"
+	u, _ := url.Parse(input)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sanitizeFilename(input, u)
 	}
 }

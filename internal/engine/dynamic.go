@@ -4,6 +4,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/law-makers/crawl/internal/auth"
+	"github.com/law-makers/crawl/internal/cache"
+	"github.com/law-makers/crawl/internal/ratelimit"
 	"github.com/law-makers/crawl/pkg/models"
 	"github.com/rs/zerolog/log"
 )
@@ -18,25 +21,23 @@ import (
 // DynamicScraper implements the Scraper interface using headless Chrome
 // It uses chromedp to render JavaScript and handle SPAs (React/Vue/Angular)
 type DynamicScraper struct {
-	// headless controls whether to show browser window
-	headless bool
-	// userAgent to use for requests
-	userAgent string
+	cache       cache.Cache
+	limiter     ratelimit.RateLimiter
+	browserPool *BrowserPool
+	client      *http.Client
+	timeout     time.Duration
+	userAgent   string
 }
 
-// NewDynamicScraper creates a new DynamicScraper with default settings
-func NewDynamicScraper() *DynamicScraper {
+// NewDynamicScraper creates a new DynamicScraper with dependency injection
+func NewDynamicScraper(c cache.Cache, lim ratelimit.RateLimiter, pool *BrowserPool, client *http.Client, timeout time.Duration, ua string) *DynamicScraper {
 	return &DynamicScraper{
-		headless:  true,
-		userAgent: "Crawl/1.0 (https://github.com/law-makers/crawl)",
-	}
-}
-
-// NewDynamicScraperVisible creates a DynamicScraper with visible browser (for debugging/auth)
-func NewDynamicScraperVisible() *DynamicScraper {
-	return &DynamicScraper{
-		headless:  false,
-		userAgent: "Crawl/1.0 (https://github.com/law-makers/crawl)",
+		cache:       c,
+		limiter:     lim,
+		browserPool: pool,
+		client:      client,
+		timeout:     timeout,
+		userAgent:   ua,
 	}
 }
 
@@ -52,7 +53,6 @@ func (d *DynamicScraper) Fetch(opts models.RequestOptions) (*models.PageData, er
 	log.Debug().
 		Str("url", opts.URL).
 		Str("scraper", d.Name()).
-		Bool("headless", d.headless).
 		Msg("Starting fetch")
 
 	// Set timeout - use a reasonable timeout
@@ -68,11 +68,11 @@ func (d *DynamicScraper) Fetch(opts models.RequestOptions) (*models.PageData, er
 	log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Context created")
 
 	// Allocator options - optimized for speed with fast shutdown
+	chromePath := FindChrome()
 	allocOpts := []chromedp.ExecAllocatorOption{
-		chromedp.ExecPath("/usr/bin/google-chrome-stable"),
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
-		chromedp.Flag("headless", d.headless),
+		chromedp.Flag("headless", "new"),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -93,6 +93,11 @@ func (d *DynamicScraper) Fetch(opts models.RequestOptions) (*models.PageData, er
 		chromedp.Flag("safebrowsing-disable-auto-update", true),
 		chromedp.Flag("single-process", true), // Critical for fast shutdown
 		chromedp.UserAgent(d.userAgent),
+	}
+
+	// Set chrome path if found
+	if chromePath != "" {
+		allocOpts = append([]chromedp.ExecAllocatorOption{chromedp.ExecPath(chromePath)}, allocOpts...)
 	}
 
 	// Add proxy if specified

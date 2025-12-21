@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,6 +10,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	"github.com/law-makers/crawl/internal/app"
+	"github.com/law-makers/crawl/internal/config"
 )
 
 // ANSI color codes
@@ -23,9 +27,12 @@ const (
 )
 
 var (
-	verbose bool
-	proxy   string
-	timeout string
+	verbose    bool
+	quiet      bool
+	jsonOutput bool
+	proxy      string
+	timeout    string
+	userAgent  string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -43,20 +50,39 @@ It uses a "Hybrid Engine" approach:
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
+// It initializes the application and passes it to all commands.
 func Execute() {
-	err := rootCmd.Execute()
+	// Load configuration first
+	cfg, err := config.Load(rootCmd)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load configuration, using defaults")
+		cfg = &config.Config{}
+	}
+
+	// Create application with all dependencies
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout*10)
+	defer cancel()
+
+	appCtx, err := app.New(ctx, cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize application")
+	}
+	defer appCtx.Close(ctx)
+
+	// Store app in global context for CLI commands to access
+	SetApp(rootCmd, appCtx)
+
+	// Execute CLI
+	err = rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
 	}
 }
 
 func init() {
+	// Register centralized flags
+	config.RegisterFlags(rootCmd)
 	cobra.OnInitialize(initConfig)
-
-	// Global flags
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable debug logging")
-	rootCmd.PersistentFlags().StringVar(&proxy, "proxy", "", "Set HTTP/SOCKS5 proxy (e.g., http://localhost:8080)")
-	rootCmd.PersistentFlags().StringVar(&timeout, "timeout", "30s", "Set hard timeout for requests")
 
 	// Customize help and version flag descriptions
 	rootCmd.Flags().BoolP("help", "h", false, "Help for Crawl")
@@ -65,23 +91,45 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	// Configure zerolog
-	if verbose {
+	// Load configuration (reads flags and env)
+	cfg, err := config.Load(rootCmd)
+	if err != nil {
+		// Fall back to defaults but log the issue
+		log.Warn().Err(err).Msg("failed to load configuration, using defaults")
+		cfg = &config.Config{}
+	}
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	} else {
+		verbose = true
+	case "error":
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+		quiet = true
+	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	log.Debug().Msg("Verbose logging enabled")
-
-	if proxy != "" {
-		log.Debug().Str("proxy", proxy).Msg("Proxy configured")
+	if cfg.JSONLog {
+		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+		jsonOutput = true
+	} else {
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 
-	if timeout != "" {
-		log.Debug().Str("timeout", timeout).Msg("Timeout configured")
+	// Populate legacy globals so existing commands work
+	userAgent = cfg.UserAgent
+	proxy = cfg.Proxy
+	timeout = cfg.HTTPTimeout.String()
+
+	log.Debug().Str("user_agent", cfg.UserAgent).Msg("Configuration loaded")
+}
+
+// GetUserAgent returns the configured user agent string
+func GetUserAgent() string {
+	if userAgent != "" {
+		return userAgent
 	}
+	return "Crawl/1.0 (https://github.com/law-makers/crawl)"
 }
 
 func init() {

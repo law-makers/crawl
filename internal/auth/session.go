@@ -4,11 +4,15 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/network"
+	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 )
 
@@ -90,6 +94,75 @@ type Cookie struct {
 	SameSite string  `json:"sameSite,omitempty"`
 }
 
+// IsExpired checks if the cookie is expired
+func (c *Cookie) IsExpired() bool {
+	if c.Expires == 0 {
+		return false // Session cookie
+	}
+	// Expires is float64 (seconds since epoch)
+	return float64(time.Now().Unix()) > c.Expires
+}
+
+// ValidateCookies returns a list of expired cookie names
+func (s *SessionData) ValidateCookies() []string {
+	var expired []string
+	for _, cookie := range s.Cookies {
+		if cookie.IsExpired() {
+			expired = append(expired, cookie.Name)
+		}
+	}
+	return expired
+}
+
+// ToHTTPCookies converts SessionData cookies to http.Cookie format for use with http.Client
+func (s *SessionData) ToHTTPCookies() []*http.Cookie {
+	cookies := make([]*http.Cookie, 0, len(s.Cookies))
+	for _, c := range s.Cookies {
+		cookie := &http.Cookie{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Expires:  time.Unix(int64(c.Expires), 0),
+			HttpOnly: c.HTTPOnly,
+			Secure:   c.Secure,
+		}
+		cookies = append(cookies, cookie)
+	}
+	return cookies
+}
+
+// ToCDPCookies converts SessionData cookies to chromedp cookie format for use with chromedp
+func (s *SessionData) ToCDPCookies() []*network.CookieParam {
+	cookies := make([]*network.CookieParam, 0, len(s.Cookies))
+	for _, c := range s.Cookies {
+		cookie := &network.CookieParam{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			HTTPOnly: c.HTTPOnly,
+			Secure:   c.Secure,
+		}
+		if c.Expires > 0 {
+			// Convert Unix timestamp to cdp.TimeSinceEpoch
+			t := time.Unix(int64(c.Expires), 0)
+			expires := cdp.TimeSinceEpoch(t)
+			cookie.Expires = &expires
+		}
+		switch c.SameSite {
+		case "Strict":
+			cookie.SameSite = network.CookieSameSiteStrict
+		case "Lax":
+			cookie.SameSite = network.CookieSameSiteLax
+		case "None":
+			cookie.SameSite = network.CookieSameSiteNone
+		}
+		cookies = append(cookies, cookie)
+	}
+	return cookies
+}
+
 // SaveSession saves a session securely to the OS keyring or file
 func SaveSession(session *SessionData) error {
 	if session.Name == "" {
@@ -161,6 +234,26 @@ func LoadSession(name string) (*SessionData, error) {
 	// Check if expired
 	if !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt) {
 		return nil, fmt.Errorf("session expired")
+	}
+
+	// Check for expired cookies and filter them out
+	if expired := session.ValidateCookies(); len(expired) > 0 {
+		log.Warn().
+			Strs("expired_cookies", expired).
+			Msg("Session contains expired cookies, filtering them out")
+
+		// Filter out expired cookies
+		validCookies := []Cookie{}
+		for _, c := range session.Cookies {
+			if !c.IsExpired() {
+				validCookies = append(validCookies, c)
+			}
+		}
+		session.Cookies = validCookies
+
+		if len(session.Cookies) == 0 {
+			return nil, fmt.Errorf("session has no valid cookies (all expired)")
+		}
 	}
 
 	return &session, nil
