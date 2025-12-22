@@ -67,61 +67,88 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 		timeout = 30 * time.Second
 	}
 
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	var ctx context.Context
+	var cancel context.CancelFunc
 
-	log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Context created")
+	// 1. Try to use browser pool (faster and more stable)
+	if d.browserPool != nil {
+		bCtx, err := d.browserPool.Acquire(timeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to acquire browser from pool: %w", err)
+		}
+		// Release back to pool when function exits
+		defer d.browserPool.Release(bCtx)
 
-	// Allocator options - optimized for speed with fast shutdown
-	chromePath := FindChrome()
-	allocOpts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.Flag("headless", "new"),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-breakpad", true),
-		chromedp.Flag("disable-client-side-phishing-detection", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-hang-monitor", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-prompt-on-repost", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("disable-translate", true),
-		chromedp.Flag("force-color-profile", "srgb"),
-		chromedp.Flag("metrics-recording-only", true),
-		chromedp.Flag("mute-audio", true),
-		chromedp.Flag("safebrowsing-disable-auto-update", true),
-		chromedp.Flag("single-process", true), // Critical for fast shutdown
-		chromedp.UserAgent(d.userAgent),
+		// Create timeout context for this specific request
+		ctx, cancel = context.WithTimeout(bCtx.Ctx, timeout)
+		defer cancel()
+
+		log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Acquired browser from pool")
+	} else {
+		// 2. Fallback: Create new allocator and context (slower)
+		// We mirror the robust flags from browser_pool.go here to ensure stability on Windows
+
+		// Create base context with timeout
+		var baseCancel context.CancelFunc
+		ctx, baseCancel = context.WithTimeout(context.Background(), timeout)
+		defer baseCancel()
+
+		chromePath := FindChrome()
+		allocOpts := []chromedp.ExecAllocatorOption{
+			chromedp.NoFirstRun,
+			chromedp.NoDefaultBrowserCheck,
+			chromedp.Flag("headless", "new"),
+			chromedp.Flag("disable-gpu", true),
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("disable-dev-shm-usage", true),
+			chromedp.Flag("disable-extensions", true),
+			chromedp.Flag("disable-background-networking", true),
+			chromedp.Flag("disable-breakpad", true),
+			chromedp.Flag("disable-client-side-phishing-detection", true),
+			chromedp.Flag("disable-default-apps", true),
+			chromedp.Flag("disable-hang-monitor", true),
+			chromedp.Flag("disable-ipc-flooding-protection", true),
+			chromedp.Flag("disable-prompt-on-repost", true),
+			chromedp.Flag("disable-renderer-backgrounding", true),
+			chromedp.Flag("disable-sync", true),
+			chromedp.Flag("disable-translate", true),
+			chromedp.Flag("force-color-profile", "srgb"),
+			chromedp.Flag("metrics-recording-only", true),
+			chromedp.Flag("mute-audio", true),
+			chromedp.Flag("safebrowsing-disable-auto-update", true),
+			// Robustness flags (critical for Windows stability)
+			chromedp.Flag("disable-features", "site-per-process,TranslateUI,BlinkGenPropertyTrees"),
+			chromedp.Flag("enable-features", "NetworkService,NetworkServiceInProcess"),
+			chromedp.Flag("disable-blink-features", "AutomationControlled"),
+			chromedp.Flag("disable-infobars", true),
+			chromedp.Flag("window-size", "1920,1080"),
+			chromedp.Flag("disk-cache-size", "0"),
+			chromedp.Flag("media-cache-size", "0"),
+			chromedp.UserAgent(d.userAgent),
+		}
+
+		// Set chrome path if found
+		if chromePath != "" {
+			allocOpts = append([]chromedp.ExecAllocatorOption{chromedp.ExecPath(chromePath)}, allocOpts...)
+		}
+
+		// Add proxy if specified
+		if opts.Proxy != "" {
+			allocOpts = append(allocOpts, chromedp.ProxyServer(opts.Proxy))
+		}
+
+		// Create allocator context
+		var allocCancel context.CancelFunc
+		ctx, allocCancel = chromedp.NewExecAllocator(ctx, allocOpts...)
+		// We defer allocCancel in a way that it runs when the function returns
+		defer allocCancel()
+
+		// Create browser context
+		ctx, cancel = chromedp.NewContext(ctx)
+		defer cancel()
+
+		log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Created new browser context (fallback)")
 	}
-
-	// Set chrome path if found
-	if chromePath != "" {
-		allocOpts = append([]chromedp.ExecAllocatorOption{chromedp.ExecPath(chromePath)}, allocOpts...)
-	}
-
-	// Add proxy if specified
-	if opts.Proxy != "" {
-		allocOpts = append(allocOpts, chromedp.ProxyServer(opts.Proxy))
-	}
-
-	// Create allocator context
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, allocOpts...)
-	defer allocCancel()
-
-	log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Allocator created")
-
-	// Create browser context
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
-	defer browserCancel()
-
-	log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Browser context created")
 
 	// Load session if specified and inject cookies before navigation
 	var sessionCookies []*network.CookieParam
@@ -181,7 +208,7 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 	log.Debug().Msg("Starting chromedp.Run")
 
 	// Listen for network events to capture status code and headers
-	chromedp.ListenTarget(browserCtx, func(ev interface{}) {
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch ev := ev.(type) {
 		case *network.EventResponseReceived:
 			resp := ev.Response
@@ -225,7 +252,7 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 	)
 
 	// Execute tasks with fast rendering - no blocking waits
-	err := chromedp.Run(browserCtx, tasks...)
+	err := chromedp.Run(ctx, tasks...)
 
 	log.Debug().Dur("elapsed_ms", time.Since(navigateStart)).Msg("chromedp.Run completed")
 
@@ -242,7 +269,7 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 	pageData.ResponseTime = responseTime
 
 	// Parse HTML to extract additional data
-	err = extractDataFromHTML(browserCtx, opts, pageData)
+	err = extractDataFromHTML(ctx, opts, pageData)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to extract additional data")
 	}

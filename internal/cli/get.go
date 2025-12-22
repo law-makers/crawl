@@ -239,42 +239,42 @@ func saveOutput(data *models.PageData, pathStr string) error {
 
 // printMetadataSummary prints key metadata fields from PageData using colors and aligns columns
 func printMetadataSummary(data *models.PageData) {
-    labelStyled := func(s string) string { return ui.ColorBold + s + ui.ColorReset }
-    valStyled := func(s string) string { return ui.ColorWhite + s + ui.ColorReset }
+	labelStyled := func(s string) string { return ui.ColorBold + s + ui.ColorReset }
+	valStyled := func(s string) string { return ui.ColorWhite + s + ui.ColorReset }
 
-    // 1. Define the rows structure and populate data
-    // We do this first so we can iterate over it to find the max width
-    rows := []struct {
-        Label string
-        Value string
-    }{
-        {"URL", data.URL},
-        {"Status", fmt.Sprintf("%d", data.StatusCode)},
-        {"Title", data.Title},
-        {"Response Time", fmt.Sprintf("%dms", data.ResponseTime)},
-        {"Links", fmt.Sprintf("%d", len(data.Links))},
-        {"Images", fmt.Sprintf("%d", len(data.Images))},
-        {"Scripts", fmt.Sprintf("%d", len(data.Scripts))},
-    }
+	// 1. Define the rows structure and populate data
+	// We do this first so we can iterate over it to find the max width
+	rows := []struct {
+		Label string
+		Value string
+	}{
+		{"URL", data.URL},
+		{"Status", fmt.Sprintf("%d", data.StatusCode)},
+		{"Title", data.Title},
+		{"Response Time", fmt.Sprintf("%dms", data.ResponseTime)},
+		{"Links", fmt.Sprintf("%d", len(data.Links))},
+		{"Images", fmt.Sprintf("%d", len(data.Images))},
+		{"Scripts", fmt.Sprintf("%d", len(data.Scripts))},
+	}
 
-    // 2. Calculate the maximum label width dynamically
-    var maxLen int
-    for _, r := range rows {
-        if len(r.Label) > maxLen {
-            maxLen = len(r.Label)
-        }
-    }
+	// 2. Calculate the maximum label width dynamically
+	var maxLen int
+	for _, r := range rows {
+		if len(r.Label) > maxLen {
+			maxLen = len(r.Label)
+		}
+	}
 
-    // 3. Print with alignment
-    fmt.Printf("\n")
-    for _, r := range rows {
-        // Calculate padding needed to reach maxLen
-        pad := strings.Repeat(" ", maxLen-len(r.Label))
-        
-        // Print: Label + Padding + " : " + Value
-        fmt.Printf("%s%s : %s\n", labelStyled(r.Label), pad, valStyled(r.Value))
-    }
-    fmt.Printf("\n")
+	// 3. Print with alignment
+	fmt.Printf("\n")
+	for _, r := range rows {
+		// Calculate padding needed to reach maxLen
+		pad := strings.Repeat(" ", maxLen-len(r.Label))
+
+		// Print: Label + Padding + " : " + Value
+		fmt.Printf("%s%s : %s\n", labelStyled(r.Label), pad, valStyled(r.Value))
+	}
+	fmt.Printf("\n")
 }
 
 // terminalHyperlink returns an OSC 8 hyperlink if supported, falling back to plain path

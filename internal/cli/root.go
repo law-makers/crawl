@@ -294,7 +294,7 @@ func customUsageFunc(cmd *cobra.Command) error {
 		printFlagsToStderr(cmd.LocalFlags().FlagUsages())
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%sUse \"%s%s%s %s--help%s\" for more information.%s\n\n",
+	fmt.Fprintf(os.Stderr, "\n%sUse \"%s%s%s %s--help%s\" for more information.%s\n",
 		ui.ColorDim,
 		ui.ColorCyan, cmd.CommandPath(), ui.ColorReset+ui.ColorDim,
 		ui.ColorGreen, ui.ColorReset+ui.ColorDim,
