@@ -40,11 +40,7 @@ var rootCmd = &cobra.Command{
 	Use:   "crawl",
 	Short: "A fast and cross-platform CLI for scraping websites",
 	Long: `Crawl is a unified data extraction tool designed to scrape static sites, 
-SPAs, authenticated sessions, and rich media from social platforms.
-
-It uses a "Hybrid Engine" approach:
-- Raw HTTP requests for speed (static sites)
-- Headless browser automation for complex interactions (SPAs/Login)`,
+SPAs, authenticated sessions, and rich media from social platforms.`,
 	Version: "0.1.0",
 }
 
@@ -52,30 +48,50 @@ It uses a "Hybrid Engine" approach:
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 // It initializes the application and passes it to all commands.
 func Execute() {
-	// Load configuration first
-	cfg, err := config.Load(rootCmd)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to load configuration, using defaults")
-		cfg = &config.Config{}
-	}
-
-	// Create application with all dependencies
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout*10)
-	defer cancel()
-
-	appCtx, err := app.New(ctx, cfg)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to initialize application")
-	}
-	defer appCtx.Close(ctx)
-
-	// Store app in global context for CLI commands to access
-	SetApp(rootCmd, appCtx)
-
-	// Execute CLI
-	err = rootCmd.Execute()
+	// Execute CLI (application is initialized lazily in PersistentPreRunE)
+	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
+	}
+}
+
+func init() {
+	// Lazily initialize the application before running commands (avoid starting app for -h/help)
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if GetApp() != nil {
+			return nil
+		}
+
+		cfg, err := config.Load(rootCmd)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to load configuration, using defaults")
+			cfg = &config.Config{}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout*10)
+		defer cancel()
+		// If initialization fails, cancel immediately
+		appCtx, err := app.New(ctx, cfg)
+		if err != nil {
+			return err
+		}
+
+		// Store app globally for commands to access
+		SetApp(rootCmd, appCtx)
+		return nil
+	}
+
+	// Ensure app is closed after command runs
+	rootCmd.PersistentPostRun = func(cmd *cobra.Command, args []string) {
+		appCtx := GetApp()
+		if appCtx == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), appCtx.Config.HTTPTimeout*10)
+		defer cancel()
+		_ = appCtx.Close(ctx)
+		// Clear global app reference
+		SetApp(rootCmd, nil)
 	}
 }
 
@@ -106,7 +122,8 @@ func initConfig() {
 		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 		quiet = true
 	default:
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		// Default to suppressing info logs unless verbose is explicitly requested
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	}
 
 	if cfg.JSONLog {

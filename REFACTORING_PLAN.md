@@ -93,52 +93,6 @@ func (d *DynamicScraper) Fetch(ctx context.Context, opts RequestOptions, cache C
 
 ## Phase 3: Code Organization & Modularity
 
-### 3.1 Refactor Engine Package Structure
-
-**Current Issue**: Mixed concerns (static, dynamic, batch, extraction)
-
-**New Structure**:
-```
-internal/engine/
-├── interfaces.go         # Scraper interface (moved from engine.go)
-├── errors.go             # Engine-specific errors
-├── static/
-│   ├── scraper.go        # StaticScraper implementation
-│   ├── extractor.go      # HTML extraction logic
-│   └── pool.go           # Connection pooling
-├── dynamic/
-│   ├── scraper.go        # DynamicScraper implementation
-│   ├── browser.go        # Browser pool management
-│   ├── extractor.go      # JS execution and extraction
-│   └── options.go        # Dynamic scraper options
-├── hybrid/
-│   ├── scraper.go        # HybridScraper implementation
-│   ├── detector.go       # Static vs Dynamic detection
-│   └── strategy.go       # Mode selection strategy
-├── batch/
-│   ├── scraper.go        # Batch processing
-│   ├── concurrency.go    # Concurrency calculation
-│   └── grouping.go       # Domain grouping
-└── metadata/
-    ├── extractor.go      # Metadata extraction
-    └── utils.go          # Utility functions
-```
-
-**Implementation Steps**:
-
-1. **Create clear sub-packages** with single responsibilities
-2. **Move implementations** to appropriate packages
-3. **Define package-level interfaces** for cross-package communication
-4. **Remove circular dependencies** (if any)
-
-**Impact**:
-- ✅ Better code organization
-- ✅ Single responsibility principle
-- ✅ Easier to find and modify code
-- ✅ Better for parallel development
-
----
-
 ### 3.2 Refactor CLI Package Structure
 
 **Current Issue**: All commands in one package, mixed concerns
@@ -146,7 +100,7 @@ internal/engine/
 **New Structure**:
 ```
 internal/cli/
-├── root.go               # Root command setup
+├── root.go              # Root command setup
 ├── cmd.go               # Command registration
 ├── flags/
 │   ├── common.go        # Common flags

@@ -12,6 +12,9 @@ import (
 	"github.com/law-makers/crawl/internal/cache"
 	"github.com/law-makers/crawl/internal/config"
 	"github.com/law-makers/crawl/internal/engine"
+	"github.com/law-makers/crawl/internal/engine/dynamic"
+	"github.com/law-makers/crawl/internal/engine/hybrid"
+	"github.com/law-makers/crawl/internal/engine/static"
 	"github.com/law-makers/crawl/internal/ratelimit"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -25,7 +28,7 @@ type Application struct {
 	Config      *config.Config
 	Logger      *zerolog.Logger
 	Cache       cache.Cache
-	BrowserPool *engine.BrowserPool
+	BrowserPool *dynamic.BrowserPool
 	RateLimiter ratelimit.RateLimiter
 	HTTPClient  *http.Client
 	Scraper     engine.Scraper
@@ -49,21 +52,26 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 	}
 
 	// Initialize logger based on config
-	logLevel := zerolog.InfoLevel
+	logLevel := zerolog.ErrorLevel // default: suppress non-verbose info logs
 	switch cfg.LogLevel {
 	case "debug":
 		logLevel = zerolog.DebugLevel
-	case "info":
-		logLevel = zerolog.InfoLevel
 	case "warn":
 		logLevel = zerolog.WarnLevel
 	case "error":
 		logLevel = zerolog.ErrorLevel
+	// Treat "info" as non-verbose (don't display info logs unless -v is used)
+	default:
+		logLevel = zerolog.ErrorLevel
 	}
 	zerolog.SetGlobalLevel(logLevel)
 
-	var logWriter io.Writer = os.Stderr
+	var logWriter io.Writer
 	if cfg.JSONLog {
+		// JSON logs to stderr
+		logWriter = os.Stderr
+	} else {
+		// Human-friendly console output otherwise
 		logWriter = zerolog.NewConsoleWriter()
 	}
 
@@ -81,7 +89,7 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 		Msg("Memory cache initialized")
 
 	// Create browser pool
-	browserPool, err := engine.NewBrowserPool(engine.BrowserPoolOptions{
+	browserPool, err := dynamic.NewBrowserPool(dynamic.BrowserPoolOptions{
 		Size:      cfg.BrowserPoolSize,
 		Headless:  cfg.BrowserHeadless,
 		UserAgent: cfg.UserAgent,
@@ -122,7 +130,7 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 		Msg("HTTP client initialized")
 
 	// Create scrapers
-	staticScraper := engine.NewStaticScraper(
+	staticScraper := static.New(
 		memCache,
 		rateLimiter,
 		httpClient,
@@ -130,16 +138,15 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 		cfg.UserAgent,
 	)
 
-	dynamicScraper := engine.NewDynamicScraper(
+	dynamicScraper := dynamic.New(
 		memCache,
 		rateLimiter,
 		browserPool,
-		httpClient,
 		cfg.HTTPTimeout,
 		cfg.UserAgent,
 	)
 
-	hybridScraper := engine.NewHybridScraper(staticScraper, dynamicScraper)
+	hybridScraper := hybrid.New(staticScraper, dynamicScraper)
 	logger.Debug().Msg("Scrapers initialized")
 
 	app := &Application{

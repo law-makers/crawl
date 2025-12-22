@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/law-makers/crawl/internal/engine/batch"
 	"github.com/law-makers/crawl/pkg/models"
 )
 
@@ -93,7 +94,7 @@ func BenchmarkBatchScraper(b *testing.B) {
 	defer ts.Close()
 
 	scraper := NewTestStaticScraper()
-	batchScraper := NewBatchScraper(scraper, 5)
+	batchScraper := batch.New(scraper, 5)
 
 	// Create batch requests
 	requests := make([]models.RequestOptions, 10)

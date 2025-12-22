@@ -173,9 +173,10 @@ func runGet(cmd *cobra.Command, args []string) error {
 	scraper = appCtx.Scraper
 
 	// Override if static mode is requested
-	if scraperMode == models.ModeStatic {
+	switch scraperMode {
+	case models.ModeStatic:
 		log.Debug().Msg("Using StaticScraper")
-	} else if scraperMode == models.ModeSPA {
+	case models.ModeSPA:
 		log.Debug().Msg("Using DynamicScraper (headless Chrome)")
 	}
 
@@ -434,13 +435,13 @@ func printOutput(data *models.PageData) error {
 
 	// Otherwise, print a summary with JSON
 	fmt.Printf("\n")
-	fmt.Printf("URL:          %s\n", data.URL)
-	fmt.Printf("Status:       %d\n", data.StatusCode)
-	fmt.Printf("Title:        %s\n", data.Title)
+	fmt.Printf("URL:           %s\n", data.URL)
+	fmt.Printf("Status:        %d\n", data.StatusCode)
+	fmt.Printf("Title:         %s\n", data.Title)
 	fmt.Printf("Response Time: %dms\n", data.ResponseTime)
-	fmt.Printf("Links:        %d\n", len(data.Links))
-	fmt.Printf("Images:       %d\n", len(data.Images))
-	fmt.Printf("Scripts:      %d\n", len(data.Scripts))
+	fmt.Printf("Links:         %d\n", len(data.Links))
+	fmt.Printf("Images:        %d\n", len(data.Images))
+	fmt.Printf("Scripts:       %d\n", len(data.Scripts))
 	fmt.Printf("\n")
 
 	// Print content preview (first 500 chars)
