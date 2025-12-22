@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/law-makers/crawl/internal/auth"
+	"github.com/law-makers/crawl/internal/ui"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -67,14 +68,14 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		Str("session", sessionName).
 		Msg("Initiating login")
 
-	fmt.Printf("\n🔐 Interactive Login\n")
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-	fmt.Printf("  Session:  %s\n", sessionName)
-	fmt.Printf("  URL:      %s\n", url)
+	fmt.Printf("\n%s\n", ui.Bold("🔐 Interactive Login"))
+	fmt.Printf("%s\n\n", ui.ColorDim+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+ui.ColorReset)
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Session:"+ui.ColorReset, ui.ColorWhite+sessionName+ui.ColorReset)
+	fmt.Printf("  %s %s\n", ui.ColorBold+"URL:"+ui.ColorReset, ui.ColorWhite+url+ui.ColorReset)
 	if waitSelector != "" {
-		fmt.Printf("  Waiting:  %s\n", waitSelector)
+		fmt.Printf("  %s %s\n", ui.ColorBold+"Waiting:"+ui.ColorReset, ui.ColorWhite+waitSelector+ui.ColorReset)
 	}
-	fmt.Printf("  Timeout:  %s\n\n", timeout)
+	fmt.Printf("  %s %s\n\n", ui.ColorBold+"Timeout:"+ui.ColorReset, ui.ColorWhite+timeout.String()+ui.ColorReset)
 
 	// Perform interactive login
 	opts := auth.LoginOptions{
@@ -97,10 +98,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
 
-	fmt.Printf("\n✓ Session saved successfully!\n")
-	fmt.Printf("\nYou can now use this session with:\n")
-	fmt.Printf("  crawl get <url> --session=%s\n", sessionName)
-	fmt.Printf("  crawl media <url> --session=%s\n\n", sessionName)
+	fmt.Println(ui.Success("\n✓ Session saved successfully!"))
+	fmt.Printf("\n%s\n", ui.Bold("You can now use this session with:"))
+	fmt.Printf("  %s %s\n", ui.ColorCyan+"crawl get <url> --session="+ui.ColorReset, ui.ColorWhite+sessionName+ui.ColorReset)
+	fmt.Printf("  %s %s\n\n", ui.ColorCyan+"crawl media <url> --session="+ui.ColorReset, ui.ColorWhite+sessionName+ui.ColorReset)
 
 	// Show expiration if available
 	if !session.ExpiresAt.IsZero() {

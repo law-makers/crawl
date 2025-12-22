@@ -13,9 +13,9 @@ type ctxKey string
 
 const appKey ctxKey = "app"
 
-// SetApp stores the Application in the command's context and keeps a global fallback.
-// This uses the `appKey` context key so callers that can access a Cobra command's
-// context can retrieve the app without relying on global state.
+// SetApp stores the Application in the command's context.
+// Calls should prefer retrieving the app from the specific command's context
+// using `GetAppFromCmd(cmd)` when possible.
 func SetApp(cmd *cobra.Command, a *app.Application) {
 	if cmd == nil {
 		return
@@ -27,25 +27,22 @@ func SetApp(cmd *cobra.Command, a *app.Application) {
 		ctx = context.Background()
 	}
 	cmd.SetContext(context.WithValue(ctx, appKey, a))
-
-	// Keep global fallback for existing call sites
-	globalApp = a
 }
 
-// GetApp retrieves the Application from the root command's context if available,
-// otherwise falls back to the global variable.
-func GetApp() *app.Application {
-	// Prefer context-based app if present on the root command
-	if rootCmd != nil && rootCmd.Context() != nil {
-		if v := rootCmd.Context().Value(appKey); v != nil {
-			if a, ok := v.(*app.Application); ok {
-				return a
-			}
+// GetAppFromCmd retrieves the Application stored in the provided command's context.
+func GetAppFromCmd(cmd *cobra.Command) *app.Application {
+	if cmd == nil || cmd.Context() == nil {
+		return nil
+	}
+	if v := cmd.Context().Value(appKey); v != nil {
+		if a, ok := v.(*app.Application); ok {
+			return a
 		}
 	}
-
-	return globalApp
+	return nil
 }
 
-// Global reference - temporary until full context passing is implemented
-var globalApp *app.Application
+// GetApp retrieves the Application from the root command's context (convenience wrapper).
+func GetApp() *app.Application {
+	return GetAppFromCmd(rootCmd)
+}

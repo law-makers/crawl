@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/law-makers/crawl/internal/auth"
+	"github.com/law-makers/crawl/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -61,37 +62,38 @@ func runSessionsList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(sessions) == 0 {
-		fmt.Println("\nNo saved sessions found.")
-		fmt.Println("\nCreate a session with:")
-		fmt.Println("  crawl login <url> --session=<name>")
+		fmt.Println("\n" + ui.Info("No saved sessions found."))
+		fmt.Println("\n" + ui.Bold("Create a session with:"))
+		fmt.Println("  " + ui.ColorCyan + "crawl login <url> --session=<name>" + ui.ColorReset)
 		fmt.Println()
 		return nil
 	}
 
-	fmt.Printf("\n📋 Saved Sessions (%d)\n", len(sessions))
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("\n%s %d\n", ui.Bold("📋 Saved Sessions"), len(sessions))
+	fmt.Println(ui.ColorDim + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ui.ColorReset)
 	fmt.Println()
 
 	for i, name := range sessions {
-		fmt.Printf("%d. %s\n", i+1, name)
+		fmt.Printf("%d. %s\n", i+1, ui.ColorWhite+name+ui.ColorReset)
 
 		// Try to load session details
 		session, err := auth.LoadSession(name)
 		if err != nil {
-			fmt.Printf("   ⚠️  Error loading: %v\n", err)
+			fmt.Printf("   %s %v\n", ui.Info("⚠️ Error loading:"), err)
 			continue
 		}
 
-		fmt.Printf("   URL: %s\n", session.URL)
-		fmt.Printf("   Cookies: %d\n", len(session.Cookies))
-		fmt.Printf("   Created: %s\n", session.CreatedAt.Format(time.RFC1123))
+		fmt.Printf("   %s %s\n", ui.ColorBold+"URL:"+ui.ColorReset, ui.ColorWhite+session.URL+ui.ColorReset)
+		fmt.Printf("   %s %s\n", ui.ColorBold+"Cookies:"+ui.ColorReset, ui.ColorWhite+fmt.Sprintf("%d", len(session.Cookies))+ui.ColorReset)
+		fmt.Printf("   %s %s\n", ui.ColorBold+"Created:"+ui.ColorReset, ui.ColorWhite+session.CreatedAt.Format(time.RFC1123)+ui.ColorReset)
 
 		if !session.ExpiresAt.IsZero() {
 			if time.Now().After(session.ExpiresAt) {
-				fmt.Printf("   Status: ⚠️  Expired (%s ago)\n", time.Since(session.ExpiresAt).Round(time.Hour))
+				fmt.Printf("   %s %s\n", ui.Info("Status:"), ui.Error("⚠️ Expired"))
 			} else {
-				fmt.Printf("   Expires: %s (in %s)\n",
-					session.ExpiresAt.Format(time.RFC1123),
+				fmt.Printf("   %s %s (in %s)\n",
+					ui.ColorBold+"Expires:"+ui.ColorReset,
+					ui.ColorWhite+session.ExpiresAt.Format(time.RFC1123)+ui.ColorReset,
 					time.Until(session.ExpiresAt).Round(time.Hour))
 			}
 		}
@@ -113,36 +115,36 @@ func runSessionsView(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load session '%s': %w", name, err)
 	}
 
-	fmt.Printf("\n🔍 Session Details: %s\n", name)
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("\n%s %s\n", ui.Bold("🔍 Session Details:"), ui.ColorWhite+name+ui.ColorReset)
+	fmt.Println(ui.ColorDim + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ui.ColorReset)
 	fmt.Println()
 
-	fmt.Printf("Name:     %s\n", session.Name)
-	fmt.Printf("URL:      %s\n", session.URL)
-	fmt.Printf("Created:  %s\n", session.CreatedAt.Format(time.RFC1123))
+	fmt.Printf("%s %s\n", ui.ColorBold+"Name:"+ui.ColorReset, ui.ColorWhite+session.Name+ui.ColorReset)
+	fmt.Printf("%s %s\n", ui.ColorBold+"URL:"+ui.ColorReset, ui.ColorWhite+session.URL+ui.ColorReset)
+	fmt.Printf("%s %s\n", ui.ColorBold+"Created:"+ui.ColorReset, ui.ColorWhite+session.CreatedAt.Format(time.RFC1123)+ui.ColorReset)
 
 	if !session.ExpiresAt.IsZero() {
-		fmt.Printf("Expires:  %s\n", session.ExpiresAt.Format(time.RFC1123))
+		fmt.Printf("%s %s\n", ui.ColorBold+"Expires:"+ui.ColorReset, ui.ColorWhite+session.ExpiresAt.Format(time.RFC1123)+ui.ColorReset)
 		if time.Now().After(session.ExpiresAt) {
-			fmt.Printf("Status:   ⚠️  Expired\n")
+			fmt.Printf("%s %s\n", ui.Info("Status:"), ui.Error("⚠️ Expired"))
 		} else {
-			fmt.Printf("Status:   ✓ Valid (expires in %s)\n", time.Until(session.ExpiresAt).Round(time.Hour))
+			fmt.Printf("%s %s %s\n", ui.ColorBold+"Status:"+ui.ColorReset, ui.Success("✓ Valid"), ui.ColorDim+fmt.Sprintf("(expires in %s)", time.Until(session.ExpiresAt).Round(time.Hour))+ui.ColorReset)
 		}
 	}
 
-	fmt.Printf("\nCookies (%d):\n", len(session.Cookies))
+	fmt.Printf("\n%s (%d):\n", ui.ColorBold+"Cookies"+ui.ColorReset, len(session.Cookies))
 	for i, cookie := range session.Cookies {
 		if i >= 5 {
-			fmt.Printf("  ... and %d more\n", len(session.Cookies)-5)
+			fmt.Printf("  %s %s\n", ui.ColorDim+"... and"+ui.ColorReset, ui.ColorWhite+fmt.Sprintf("%d more", len(session.Cookies)-5)+ui.ColorReset)
 			break
 		}
-		fmt.Printf("  • %s (domain: %s)\n", cookie.Name, cookie.Domain)
+		fmt.Printf("  • %s (domain: %s)\n", ui.ColorWhite+cookie.Name+ui.ColorReset, ui.ColorWhite+cookie.Domain+ui.ColorReset)
 	}
 
 	if len(session.Headers) > 0 {
-		fmt.Printf("\nCustom Headers (%d):\n", len(session.Headers))
+		fmt.Printf("\n%s (%d):\n", ui.ColorBold+"Custom Headers"+ui.ColorReset, len(session.Headers))
 		for key, value := range session.Headers {
-			fmt.Printf("  • %s: %s\n", key, value)
+			fmt.Printf("  • %s: %s\n", ui.ColorWhite+key+ui.ColorReset, ui.ColorWhite+value+ui.ColorReset)
 		}
 	}
 
@@ -154,12 +156,12 @@ func runSessionsDelete(cmd *cobra.Command, args []string) error {
 	name := args[0]
 
 	// Confirm deletion
-	fmt.Printf("\n⚠️  Delete session '%s'? [y/N]: ", name)
+	fmt.Printf("\n%s %s [y/N]: ", ui.Info("⚠️  Delete session"), ui.ColorWhite+name+ui.ColorReset)
 	var confirm string
 	fmt.Scanln(&confirm)
 
 	if confirm != "y" && confirm != "Y" {
-		fmt.Println("Cancelled.")
+		fmt.Println(ui.Info("Cancelled."))
 		return nil
 	}
 
@@ -168,6 +170,6 @@ func runSessionsDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 
-	fmt.Printf("\n✓ Session '%s' deleted successfully.\n\n", name)
+	fmt.Println(ui.Success(fmt.Sprintf("\n✓ Session '%s' deleted successfully.\n", name)))
 	return nil
 }

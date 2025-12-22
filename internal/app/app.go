@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/law-makers/crawl/internal/cache"
@@ -25,14 +26,17 @@ import (
 // It is created once at startup and shared across all CLI commands.
 // Use Close() to ensure proper resource cleanup on shutdown.
 type Application struct {
-	Config      *config.Config
-	Logger      *zerolog.Logger
-	Cache       cache.Cache
-	BrowserPool *dynamic.BrowserPool
-	RateLimiter ratelimit.RateLimiter
-	HTTPClient  *http.Client
-	Scraper     engine.Scraper
-	startTime   time.Time
+	Config         *config.Config
+	Logger         *zerolog.Logger
+	Cache          cache.Cache
+	BrowserPool    *dynamic.BrowserPool
+	poolMu         sync.Mutex
+	RateLimiter    ratelimit.RateLimiter
+	HTTPClient     *http.Client
+	StaticScraper  *static.Scraper
+	DynamicScraper *dynamic.Scraper
+	Scraper        engine.Scraper
+	startTime      time.Time
 }
 
 // New creates and initializes a new Application with all dependencies.
@@ -88,25 +92,9 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 		Int64("max_size_bytes", cfg.CacheMaxSizeBytes).
 		Msg("Memory cache initialized")
 
-	// Create browser pool
-	browserPool, err := dynamic.NewBrowserPool(dynamic.BrowserPoolOptions{
-		Size:      cfg.BrowserPoolSize,
-		Headless:  cfg.BrowserHeadless,
-		UserAgent: cfg.UserAgent,
-		Proxy:     cfg.Proxy,
-	})
-	if err != nil {
-		// Don't fail if browser pool fails - log warning and continue with static scraping only
-		logger.Warn().
-			Err(err).
-			Msg("Failed to create browser pool - dynamic scraping will be unavailable")
-		browserPool = nil
-	} else {
-		logger.Debug().
-			Int("size", cfg.BrowserPoolSize).
-			Bool("headless", cfg.BrowserHeadless).
-			Msg("Browser pool initialized")
-	}
+	// Browser pool initialization is now lazy (only created when SPA/dynamic scraping is requested).
+	// We still keep the field on Application for later creation via EnsureBrowserPool.
+	browserPool := (*dynamic.BrowserPool)(nil)
 
 	// Create rate limiter
 	rateLimiter := ratelimit.NewDomainLimiter(cfg.StaticRateLimitRPS, cfg.StaticRateLimitBurst)
@@ -138,10 +126,12 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 		cfg.UserAgent,
 	)
 
+	// Create dynamic scraper without an active pool. The pool will be created lazily
+	// when SPA mode is actually requested to avoid starting browsers unnecessarily.
 	dynamicScraper := dynamic.New(
 		memCache,
 		rateLimiter,
-		browserPool,
+		nil, // pool created on demand
 		cfg.HTTPTimeout,
 		cfg.UserAgent,
 	)
@@ -150,18 +140,57 @@ func New(ctx context.Context, cfg *config.Config) (*Application, error) {
 	logger.Debug().Msg("Scrapers initialized")
 
 	app := &Application{
-		Config:      cfg,
-		Logger:      &logger,
-		Cache:       memCache,
-		BrowserPool: browserPool,
-		RateLimiter: rateLimiter,
-		HTTPClient:  httpClient,
-		Scraper:     hybridScraper,
-		startTime:   time.Now(),
+		Config:         cfg,
+		Logger:         &logger,
+		Cache:          memCache,
+		BrowserPool:    browserPool,
+		RateLimiter:    rateLimiter,
+		HTTPClient:     httpClient,
+		StaticScraper:  staticScraper,
+		DynamicScraper: dynamicScraper,
+		Scraper:        hybridScraper,
+		startTime:      time.Now(),
 	}
 
 	logger.Info().Msg("Application initialized successfully")
 	return app, nil
+}
+
+// EnsureBrowserPool lazily creates the browser pool if it has not already been
+// initialized. Callers should provide a context with an appropriate timeout.
+func (a *Application) EnsureBrowserPool(ctx context.Context) error {
+	if a == nil {
+		return fmt.Errorf("application is nil")
+	}
+
+	a.poolMu.Lock()
+	defer a.poolMu.Unlock()
+
+	if a.BrowserPool != nil {
+		return nil
+	}
+
+	logger := a.Logger
+	logger.Debug().Msg("Initializing browser pool on demand")
+	pool, err := dynamic.NewBrowserPool(dynamic.BrowserPoolOptions{
+		Size:      a.Config.BrowserPoolSize,
+		Headless:  a.Config.BrowserHeadless,
+		UserAgent: a.Config.UserAgent,
+		Proxy:     a.Config.Proxy,
+	})
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to create browser pool on demand")
+		return err
+	}
+
+	a.BrowserPool = pool
+	// Attach to dynamic scraper so it can reuse contexts
+	if a.DynamicScraper != nil {
+		a.DynamicScraper.SetBrowserPool(pool)
+	}
+
+	logger.Info().Int("pool_size", pool.Size()).Msg("Browser pool initialized on demand")
+	return nil
 }
 
 // Close gracefully shuts down the application and all its resources.

@@ -4,6 +4,7 @@ package dynamic
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -25,6 +26,7 @@ type Scraper struct {
 	client      interface{} // Keep for compatibility
 	timeout     time.Duration
 	userAgent   string
+	mu          sync.Mutex
 }
 
 // New creates a new DynamicScraper with dependency injection
@@ -36,6 +38,13 @@ func New(c cache.Cache, lim ratelimit.RateLimiter, pool *BrowserPool, timeout ti
 		timeout:     timeout,
 		userAgent:   ua,
 	}
+}
+
+// SetBrowserPool updates the browser pool used by the scraper (thread-safe)
+func (d *Scraper) SetBrowserPool(bp *BrowserPool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.browserPool = bp
 }
 
 // Name returns the name of this scraper

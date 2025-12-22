@@ -10,6 +10,8 @@ import (
 
 	"github.com/law-makers/crawl/internal/downloader"
 	"github.com/law-makers/crawl/internal/engine"
+	"github.com/law-makers/crawl/internal/ui"
+	headersutil "github.com/law-makers/crawl/internal/utils/headers"
 	"github.com/law-makers/crawl/pkg/models"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -110,19 +112,13 @@ func runMedia(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse custom headers
-	headerMap := make(map[string]string)
-	for _, h := range headers {
-		parts := strings.SplitN(h, ":", 2)
-		if len(parts) == 2 {
-			headerMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
+	headerMap := headersutil.ParseHeaders(headers)
 
 	// Create scraper to fetch the page
 	var scraper engine.Scraper
 
-	// Get app from context
-	appCtx := GetApp()
+	// Get app from command context
+	appCtx := GetAppFromCmd(cmd)
 	if appCtx == nil {
 		return fmt.Errorf("application not initialized")
 	}
@@ -159,15 +155,15 @@ func runMedia(cmd *cobra.Command, args []string) error {
 
 	if len(mediaURLs) == 0 {
 		log.Debug().Msg("No media files found on this page")
-		fmt.Println("\n❌ No media files found.")
-		fmt.Println("\n💡 TIP: Try using --mode=spa for JavaScript-heavy sites")
+		fmt.Println("\n" + ui.Info("❌ No media files found."))
+		fmt.Println("\n" + ui.Info("💡 TIP: Try using --mode=spa for JavaScript-heavy sites"))
 		return nil
 	}
 
 	log.Debug().Int("count", len(mediaURLs)).Msg("Media URLs extracted")
-	fmt.Printf("\nFound %d media file(s):\n", len(mediaURLs))
+	fmt.Printf("\n%s %s\n", ui.Bold("Found"), ui.ColorWhite+fmt.Sprintf("%d media file(s):", len(mediaURLs))+ui.ColorReset)
 	for i, url := range mediaURLs {
-		fmt.Printf("  %d. %s\n", i+1, url)
+		fmt.Printf("  %s %d. %s\n", ui.ColorDim, i+1, ui.ColorWhite+url+ui.ColorReset)
 	}
 	fmt.Println()
 
@@ -181,7 +177,7 @@ func runMedia(cmd *cobra.Command, args []string) error {
 	pool := downloader.NewWorkerPool(concurrency, 60*time.Second, "Crawl/1.0")
 
 	// Start downloads
-	fmt.Printf("Starting download with %d workers...\n\n", concurrency)
+	fmt.Printf("%s %s\n\n", ui.Info("Starting download with"), ui.ColorWhite+fmt.Sprintf("%d workers...", concurrency)+ui.ColorReset)
 	ctx := context.Background()
 
 	downloadOpts := downloader.DownloadOptions{
@@ -197,7 +193,7 @@ func runMedia(cmd *cobra.Command, args []string) error {
 	totalSize := int64(0)
 	totalDuration := time.Duration(0)
 
-	fmt.Println("\nDownload Results:")
+	fmt.Println("\n" + ui.Bold("Download Results:"))
 	fmt.Println(strings.Repeat("=", 80))
 
 	for i, result := range results {
@@ -206,27 +202,27 @@ func runMedia(cmd *cobra.Command, args []string) error {
 			totalSize += result.Size
 			totalDuration += result.Duration
 
-			fmt.Printf("✓ [%d/%d] %s\n", i+1, len(results), filepath.Base(result.FilePath))
-			fmt.Printf("  Size: %s  Duration: %v\n", formatBytes(result.Size), result.Duration.Round(time.Millisecond))
+			fmt.Printf("%s [%d/%d] %s\n", ui.Success("✓"), i+1, len(results), ui.ColorWhite+filepath.Base(result.FilePath)+ui.ColorReset)
+			fmt.Printf("  %s %s  %s %v\n", ui.ColorDim+"Size:", ui.ColorWhite+formatBytes(result.Size)+ui.ColorReset, ui.ColorDim+"Duration:", result.Duration.Round(time.Millisecond))
 		} else {
 			failCount++
-			fmt.Printf("✗ [%d/%d] %s\n", i+1, len(results), result.URL)
-			fmt.Printf("  Error: %v\n", result.Error)
+			fmt.Printf("%s [%d/%d] %s\n", ui.Error("✗"), i+1, len(results), ui.ColorWhite+result.URL+ui.ColorReset)
+			fmt.Printf("  %s %s\n", ui.ColorDim+"Error:", ui.Error(fmt.Sprintf("%v", result.Error)))
 		}
 	}
 
 	// Print summary
 	fmt.Println(strings.Repeat("=", 80))
-	fmt.Printf("\nSummary:\n")
-	fmt.Printf("  Total: %d files\n", len(results))
-	fmt.Printf("  Success: %d\n", successCount)
-	fmt.Printf("  Failed: %d\n", failCount)
-	fmt.Printf("  Total Size: %s\n", formatBytes(totalSize))
+	fmt.Printf("\n%s\n", ui.Bold("Summary:"))
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Total:"+ui.ColorReset, ui.ColorWhite+fmt.Sprintf("%d files", len(results))+ui.ColorReset)
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Success:"+ui.ColorReset, ui.Success(fmt.Sprintf("%d", successCount)))
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Failed:"+ui.ColorReset, ui.Error(fmt.Sprintf("%d", failCount)))
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Total Size:"+ui.ColorReset, ui.ColorWhite+formatBytes(totalSize)+ui.ColorReset)
 	if successCount > 0 {
 		avgDuration := totalDuration / time.Duration(successCount)
-		fmt.Printf("  Average Time: %v per file\n", avgDuration.Round(time.Millisecond))
+		fmt.Printf("  %s %s\n", ui.ColorBold+"Average Time:"+ui.ColorReset, ui.ColorWhite+avgDuration.Round(time.Millisecond).String()+ui.ColorReset)
 	}
-	fmt.Printf("  Output Directory: %s\n", absOutputDir)
+	fmt.Printf("  %s %s\n", ui.ColorBold+"Output Directory:"+ui.ColorReset, ui.ColorWhite+absOutputDir+ui.ColorReset)
 
 	if failCount > 0 {
 		return fmt.Errorf("%d download(s) failed", failCount)

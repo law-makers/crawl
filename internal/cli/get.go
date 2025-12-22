@@ -2,23 +2,22 @@
 package cli
 
 import (
-	"encoding/csv"
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
-	"sort"
+	"path/filepath"
 	"strings"
 	"time"
 
-	md "github.com/JohannesKaufmann/html-to-markdown"
-	"github.com/JohannesKaufmann/html-to-markdown/plugin"
-	"github.com/PuerkitoBio/goquery"
 	"github.com/law-makers/crawl/internal/engine"
+	"github.com/law-makers/crawl/internal/ui"
+	headersutil "github.com/law-makers/crawl/internal/utils/headers"
+	outpututil "github.com/law-makers/crawl/internal/utils/output"
+	urlutil "github.com/law-makers/crawl/internal/utils/url"
 	"github.com/law-makers/crawl/pkg/models"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/html"
 )
 
 var (
@@ -68,29 +67,11 @@ func init() {
 	getCmd.Flags().StringVar(&fields, "fields", "", "Comma-separated fields for CSV export (e.g., name=.name,price=.price)")
 }
 
-// validateURL performs comprehensive URL validation
-func validateURL(urlStr string) error {
-	parsed, err := url.Parse(urlStr)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("invalid URL scheme: must be http or https, got %s", parsed.Scheme)
-	}
-
-	if parsed.Host == "" {
-		return fmt.Errorf("invalid URL: missing host")
-	}
-
-	return nil
-}
-
 func runGet(cmd *cobra.Command, args []string) error {
 	url := args[0]
 
 	// Validate URL
-	if err := validateURL(url); err != nil {
+	if err := urlutil.ValidateURL(url); err != nil {
 		return err
 	}
 
@@ -113,13 +94,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse custom headers
-	headerMap := make(map[string]string)
-	for _, h := range headers {
-		parts := strings.SplitN(h, ":", 2)
-		if len(parts) == 2 {
-			headerMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
+	headerMap := headersutil.ParseHeaders(headers)
 
 	// Add user agent if configured globally
 	if userAgent != "" && headerMap["User-Agent"] == "" {
@@ -160,26 +135,45 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create scraper based on mode
+	// Select scraper based on requested mode
 	var scraper engine.Scraper
 
-	// Get app from context
-	appCtx := GetApp()
+	// Get app from command context
+	appCtx := GetAppFromCmd(cmd)
 	if appCtx == nil {
 		return fmt.Errorf("application not initialized")
 	}
 
-	// Use the scraper from the app
+	// Default: application-level scraper (hybrid)
 	scraper = appCtx.Scraper
 
-	// Override if static mode is requested
 	switch scraperMode {
 	case models.ModeStatic:
-		log.Debug().Msg("Using StaticScraper")
+		if appCtx.StaticScraper != nil {
+			scraper = appCtx.StaticScraper
+			log.Debug().Msg("Using StaticScraper")
+		}
 	case models.ModeSPA:
-		log.Debug().Msg("Using DynamicScraper (headless Chrome)")
-	}
+		// Ensure browser pool exists before using the dynamic scraper
+		if appCtx.DynamicScraper == nil {
+			return fmt.Errorf("dynamic scraper is unavailable")
+		}
 
+		ctx, cancel := context.WithTimeout(context.Background(), appCtx.Config.HTTPTimeout*2)
+		defer cancel()
+		if appCtx.BrowserPool == nil {
+			if err := appCtx.EnsureBrowserPool(ctx); err != nil {
+				// If pool init fails, warn and continue - dynamic scraper can still
+				// operate without a pooled browser (per-request chromedp alloc).
+				log.Warn().Err(err).Msg("Failed to initialize browser pool; proceeding with per-request dynamic initialization")
+			}
+		}
+		scraper = appCtx.DynamicScraper
+		log.Debug().Msg("Using DynamicScraper (headless Chrome)")
+	default:
+		// ModeAuto - hybrid behavior (default)
+		log.Debug().Msg("Using HybridScraper (auto)")
+	}
 	// Fetch data
 	log.Debug().Str("url", url).Str("mode", string(scraperMode)).Msg("Fetching URL")
 	pageData, err := scraper.Fetch(opts)
@@ -196,223 +190,102 @@ func runGet(cmd *cobra.Command, args []string) error {
 	return printOutput(pageData)
 }
 
-func saveOutput(data *models.PageData, filepath string) error {
-	var content []byte
-	var err error
+func saveOutput(data *models.PageData, pathStr string) error {
+	// Normalize extension checks to be case-insensitive
+	path := strings.ToLower(pathStr)
 
 	switch {
-	case strings.HasSuffix(filepath, ".json"):
-		// Create a copy to avoid modifying the original data
-		exportData := *data
-		exportData.HTML = "" // Remove HTML from JSON export
-		resolveRelativeLinks(&exportData)
-		content, err = json.MarshalIndent(exportData, "", "  ")
-	case strings.HasSuffix(filepath, ".html"):
-		cleaned, cleanErr := cleanHTML(data.HTML)
-		if cleanErr != nil {
-			return fmt.Errorf("failed to clean HTML: %w", cleanErr)
+	case strings.HasSuffix(path, ".json"):
+		if err := outpututil.SaveJSON(data, pathStr); err != nil {
+			return fmt.Errorf("failed to save JSON: %w", err)
 		}
-		content = []byte(cleaned)
-	case strings.HasSuffix(filepath, ".txt"):
-		content = []byte(data.Content)
-	case strings.HasSuffix(filepath, ".csv"):
-		return saveCSV(data, filepath)
-	case strings.HasSuffix(filepath, ".md"):
-		return saveMarkdown(data, filepath)
-	default:
-		// Default to JSON
-		// Create a copy to avoid modifying the original data
-		exportData := *data
-		exportData.HTML = "" // Remove HTML from JSON export
-		resolveRelativeLinks(&exportData)
-		content, err = json.MarshalIndent(exportData, "", "  ")
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to marshal data: %w", err)
-	}
-
-	err = os.WriteFile(filepath, content, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	log.Info().Str("file", filepath).Msg("Output saved")
-	fmt.Printf("✓ Saved to %s\n", filepath)
-	return nil
-}
-
-func saveCSV(data *models.PageData, filepath string) error {
-	file, err := os.Create(filepath)
-	if err != nil {
-		return fmt.Errorf("failed to create CSV file: %w", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	// If we have structured data (from --fields), use that
-	if len(data.Structured) > 0 {
-		// Get headers from the first item
-		var headers []string
-		firstItem := data.Structured[0]
-		for k := range firstItem {
-			headers = append(headers, k)
-		}
-		sort.Strings(headers)
-
-		if err := writer.Write(headers); err != nil {
-			return err
-		}
-
-		for _, item := range data.Structured {
-			var row []string
-			for _, h := range headers {
-				row = append(row, item[h])
-			}
-			if err := writer.Write(row); err != nil {
-				return err
-			}
-		}
-	} else if len(data.Data) > 0 {
-		// If we have list data but no fields, just dump Text and HTML
-		if err := writer.Write([]string{"Text", "HTML"}); err != nil {
-			return err
-		}
-		for _, item := range data.Data {
-			if err := writer.Write([]string{item.Text, item.HTML}); err != nil {
-				return err
-			}
-		}
-	} else {
-		// Fallback for single page content
-		if err := writer.Write([]string{"Content", "HTML"}); err != nil {
-			return err
-		}
-		if err := writer.Write([]string{data.Content, data.HTML}); err != nil {
-			return err
-		}
-	}
-
-	log.Info().Str("file", filepath).Msg("Output saved")
-	fmt.Printf("✓ Saved to %s\n", filepath)
-	return nil
-}
-
-func saveMarkdown(data *models.PageData, filepath string) error {
-	converter := md.NewConverter("", true, nil)
-	converter.Use(plugin.GitHubFlavored())
-
-	// Add rule to resolve relative links
-	converter.AddRules(md.Rule{
-		Filter: []string{"a"},
-		Replacement: func(content string, selec *goquery.Selection, opt *md.Options) *string {
-			href, exists := selec.Attr("href")
-			if !exists {
-				return nil
-			}
-
-			resolved := resolveURL(data.URL, href)
-			title, hasTitle := selec.Attr("title")
-			var titlePart string
-			if hasTitle {
-				titlePart = fmt.Sprintf(" %q", title)
-			}
-
-			// Clean up content: replace newlines with spaces and trim
-			cleanContent := strings.Join(strings.Fields(content), " ")
-			link := fmt.Sprintf("[%s](%s%s)", cleanContent, resolved, titlePart)
-			return &link
-		},
-	})
-
-	// Add rule to resolve relative images
-	converter.AddRules(md.Rule{
-		Filter: []string{"img"},
-		Replacement: func(content string, selec *goquery.Selection, opt *md.Options) *string {
-			src, exists := selec.Attr("src")
-			if !exists {
-				return nil
-			}
-
-			resolved := resolveURL(data.URL, src)
-			alt, _ := selec.Attr("alt")
-			title, hasTitle := selec.Attr("title")
-			var titlePart string
-			if hasTitle {
-				titlePart = fmt.Sprintf(" %q", title)
-			}
-
-			link := fmt.Sprintf("![%s](%s%s)", alt, resolved, titlePart)
-			return &link
-		},
-	})
-
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("# Scrape Result: %s\n\n", data.Title))
-	sb.WriteString(fmt.Sprintf("**URL:** %s  \n", data.URL))
-	sb.WriteString(fmt.Sprintf("**Date:** %s\n\n", data.FetchedAt.Format(time.RFC1123)))
-
-	if len(data.Structured) > 0 {
-		// Create a table for structured data
-		// Get headers
-		var headers []string
-		if len(data.Structured) > 0 {
-			for k := range data.Structured[0] {
-				headers = append(headers, k)
-			}
-			sort.Strings(headers)
-		}
-
-		// Header row
-		sb.WriteString("| " + strings.Join(headers, " | ") + " |\n")
-		// Separator row
-		sb.WriteString("|" + strings.Repeat("---|", len(headers)) + "\n")
-
-		// Data rows
-		for _, item := range data.Structured {
-			var row []string
-			for _, h := range headers {
-				// Escape pipes in content
-				val := strings.ReplaceAll(item[h], "|", "\\|")
-				// Replace newlines with space to keep table structure
-				val = strings.ReplaceAll(val, "\n", " ")
-				row = append(row, val)
-			}
-			sb.WriteString("| " + strings.Join(row, " | ") + " |\n")
-		}
-		sb.WriteString("\n")
-	} else if len(data.Data) > 0 {
-		// List of items
-		for _, item := range data.Data {
-			markdown, err := converter.ConvertString(item.HTML)
-			if err != nil {
-				// Fallback to text if conversion fails
-				markdown = item.Text
-			}
-			sb.WriteString(fmt.Sprintf("- %s\n", markdown))
-		}
-		sb.WriteString("\n")
-	} else {
-		// Full page content
-		markdown, err := converter.ConvertString(data.HTML)
+	case strings.HasSuffix(path, ".html"):
+		cleaned, err := outpututil.CleanHTML(data.HTML)
 		if err != nil {
-			return fmt.Errorf("failed to convert HTML to Markdown: %w", err)
+			return fmt.Errorf("failed to clean HTML: %w", err)
 		}
-		sb.WriteString(markdown)
-		sb.WriteString("\n")
+		if err := os.WriteFile(pathStr, []byte(cleaned), 0644); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+	case strings.HasSuffix(path, ".txt"):
+		if err := os.WriteFile(pathStr, []byte(data.Content), 0644); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+	case strings.HasSuffix(path, ".csv"):
+		if err := outpututil.SaveCSV(data, pathStr); err != nil {
+			return fmt.Errorf("failed to save CSV: %w", err)
+		}
+	case strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".markdown"):
+		if err := outpututil.SaveMarkdown(data, pathStr); err != nil {
+			return fmt.Errorf("failed to save Markdown: %w", err)
+		}
+	default:
+		// Fallback to JSON for unknown extensions
+		if err := outpututil.SaveJSON(data, pathStr); err != nil {
+			return fmt.Errorf("failed to save JSON: %w", err)
+		}
 	}
 
-	err := os.WriteFile(filepath, []byte(sb.String()), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
+	// Print metadata summary for saved outputs (single call)
+	printMetadataSummary(data)
 
-	log.Info().Str("file", filepath).Msg("Output saved")
-	fmt.Printf("✓ Saved to %s\n", filepath)
+	// Make clickable link when possible using OSC 8 terminal hyperlink
+	link := terminalHyperlink(filepath.Base(pathStr), pathStr)
+	fmt.Printf("%s %s\n", ui.Success("✓ Saved to"), ui.ColorBold+link+ui.ColorReset)
+	fmt.Printf("\n")
+	log.Info().Str("file", pathStr).Msg("Output saved")
 	return nil
+}
+
+// printMetadataSummary prints key metadata fields from PageData using colors and aligns columns
+func printMetadataSummary(data *models.PageData) {
+    labelStyled := func(s string) string { return ui.ColorBold + s + ui.ColorReset }
+    valStyled := func(s string) string { return ui.ColorWhite + s + ui.ColorReset }
+
+    // 1. Define the rows structure and populate data
+    // We do this first so we can iterate over it to find the max width
+    rows := []struct {
+        Label string
+        Value string
+    }{
+        {"URL", data.URL},
+        {"Status", fmt.Sprintf("%d", data.StatusCode)},
+        {"Title", data.Title},
+        {"Response Time", fmt.Sprintf("%dms", data.ResponseTime)},
+        {"Links", fmt.Sprintf("%d", len(data.Links))},
+        {"Images", fmt.Sprintf("%d", len(data.Images))},
+        {"Scripts", fmt.Sprintf("%d", len(data.Scripts))},
+    }
+
+    // 2. Calculate the maximum label width dynamically
+    var maxLen int
+    for _, r := range rows {
+        if len(r.Label) > maxLen {
+            maxLen = len(r.Label)
+        }
+    }
+
+    // 3. Print with alignment
+    fmt.Printf("\n")
+    for _, r := range rows {
+        // Calculate padding needed to reach maxLen
+        pad := strings.Repeat(" ", maxLen-len(r.Label))
+        
+        // Print: Label + Padding + " : " + Value
+        fmt.Printf("%s%s : %s\n", labelStyled(r.Label), pad, valStyled(r.Value))
+    }
+    fmt.Printf("\n")
+}
+
+// terminalHyperlink returns an OSC 8 hyperlink if supported, falling back to plain path
+func terminalHyperlink(label, target string) string {
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		abs = target
+	}
+	// OSC 8 hyperlink: ESC ] 8 ;; url BEL label ESC ] 8 ;; BEL
+	// Use file:// scheme for local files
+	return fmt.Sprintf("\x1b]8;;file://%s\x1b\\%s\x1b]8;;\x1b\\", abs, label)
 }
 
 func printOutput(data *models.PageData) error {
@@ -421,7 +294,7 @@ func printOutput(data *models.PageData) error {
 		// Create a copy to avoid modifying the original data
 		exportData := *data
 		exportData.HTML = "" // Remove HTML from JSON export
-		resolveRelativeLinks(&exportData)
+		urlutil.ResolveRelativeLinks(&exportData)
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(exportData)
@@ -433,156 +306,19 @@ func printOutput(data *models.PageData) error {
 		return nil
 	}
 
-	// Otherwise, print a summary with JSON
-	fmt.Printf("\n")
-	fmt.Printf("URL:           %s\n", data.URL)
-	fmt.Printf("Status:        %d\n", data.StatusCode)
-	fmt.Printf("Title:         %s\n", data.Title)
-	fmt.Printf("Response Time: %dms\n", data.ResponseTime)
-	fmt.Printf("Links:         %d\n", len(data.Links))
-	fmt.Printf("Images:        %d\n", len(data.Images))
-	fmt.Printf("Scripts:       %d\n", len(data.Scripts))
-	fmt.Printf("\n")
+	// Otherwise, print a summary with colors
+	printMetadataSummary(data)
 
-	// Print content preview (first 500 chars)
+	// Print content preview (first 500 chars) with subtle formatting
 	contentPreview := data.Content
 	if len(contentPreview) > 500 {
 		contentPreview = contentPreview[:500] + "..."
 	}
-	fmt.Printf("Content Preview:\n%s\n", contentPreview)
+	fmt.Printf("%s\n%s\n\n", ui.ColorBold+"Content Preview:", ui.ColorWhite+contentPreview+ui.ColorReset)
+
+	// Helpful hint for saving to a file
+	fmt.Printf("%s\n", ui.Info("Use --output=<file> to save to a specific format (available: .json, .txt, .html, .csv, .md)"))
+	fmt.Printf("\n")
 
 	return nil
-}
-
-func resolveRelativeLinks(data *models.PageData) {
-	// Resolve Links
-	resolvedLinks := make([]string, len(data.Links))
-	for i, link := range data.Links {
-		resolvedLinks[i] = resolveURL(data.URL, link)
-	}
-	data.Links = resolvedLinks
-
-	// Resolve Images
-	resolvedImages := make([]string, len(data.Images))
-	for i, img := range data.Images {
-		resolvedImages[i] = resolveURL(data.URL, img)
-	}
-	data.Images = resolvedImages
-
-	// Resolve Scripts
-	resolvedScripts := make([]string, len(data.Scripts))
-	for i, script := range data.Scripts {
-		resolvedScripts[i] = resolveURL(data.URL, script)
-	}
-	data.Scripts = resolvedScripts
-}
-
-func resolveURL(base, href string) string {
-	u, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-	if u.IsAbs() {
-		return href
-	}
-	baseURL, err := url.Parse(base)
-	if err != nil {
-		return href
-	}
-	return baseURL.ResolveReference(u).String()
-}
-
-func cleanHTML(htmlContent string) (string, error) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
-	if err != nil {
-		return "", err
-	}
-
-	// Remove unwanted tags
-	doc.Find("script, style, link, meta, noscript, iframe, svg, form, input, button, select, textarea, canvas").Remove()
-
-	// Clean attributes
-	doc.Find("*").Each(func(i int, s *goquery.Selection) {
-		if len(s.Nodes) == 0 {
-			return
-		}
-		node := s.Nodes[0]
-		var newAttrs []html.Attribute
-		for _, attr := range node.Attr {
-			keep := false
-			switch node.Data {
-			case "a":
-				if attr.Key == "href" || attr.Key == "title" {
-					keep = true
-				}
-			case "img":
-				if attr.Key == "src" || attr.Key == "alt" || attr.Key == "title" {
-					keep = true
-				}
-			}
-			if attr.Key == "colspan" || attr.Key == "rowspan" {
-				keep = true
-			}
-			if keep {
-				newAttrs = append(newAttrs, attr)
-			}
-		}
-		node.Attr = newAttrs
-	})
-
-	// Get the html node
-	var root *html.Node
-	if len(doc.Nodes) > 0 {
-		root = doc.Nodes[0]
-	} else {
-		return "", fmt.Errorf("empty document")
-	}
-
-	return prettyPrint(root), nil
-}
-
-func prettyPrint(n *html.Node) string {
-	var sb strings.Builder
-	var f func(*html.Node, int)
-	f = func(n *html.Node, depth int) {
-		indent := strings.Repeat("  ", depth)
-		switch n.Type {
-		case html.DocumentNode:
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				f(c, depth)
-			}
-		case html.ElementNode:
-			sb.WriteString(fmt.Sprintf("%s<%s", indent, n.Data))
-			for _, a := range n.Attr {
-				sb.WriteString(fmt.Sprintf(" %s=\"%s\"", a.Key, a.Val))
-			}
-			if isVoidElement(n.Data) {
-				sb.WriteString(">\n")
-				return
-			}
-			sb.WriteString(">\n")
-
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				f(c, depth+1)
-			}
-			sb.WriteString(fmt.Sprintf("%s</%s>\n", indent, n.Data))
-		case html.TextNode:
-			text := strings.TrimSpace(n.Data)
-			if text != "" {
-				sb.WriteString(fmt.Sprintf("%s%s\n", indent, text))
-			}
-		case html.DoctypeNode:
-			sb.WriteString(fmt.Sprintf("<!DOCTYPE %s>\n", n.Data))
-		}
-	}
-	f(n, 0)
-	return sb.String()
-}
-
-func isVoidElement(tag string) bool {
-	switch tag {
-	case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr":
-		return true
-	}
-	return false
 }

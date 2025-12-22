@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/law-makers/crawl/internal/auth"
+	"github.com/law-makers/crawl/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -56,8 +57,8 @@ func init() {
 func runSessionsImport(cmd *cobra.Command, args []string) error {
 	sessionName := args[0]
 
-	fmt.Printf("\n🔐 Import Session: %s\n", sessionName)
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Printf("\n%s %s\n", ui.Bold("🔐 Import Session:"), ui.ColorBold+sessionName+ui.ColorReset)
+	fmt.Printf("%s\n\n", ui.ColorDim+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"+ui.ColorReset)
 
 	var cookies []auth.Cookie
 	var err error
@@ -110,25 +111,25 @@ func runSessionsImport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
 
-	fmt.Printf("\n✅ Session '%s' created successfully!\n", sessionName)
-	fmt.Printf("   Cookies: %d\n", len(cookies))
+	fmt.Printf("\n%s\n", ui.Success(fmt.Sprintf("✅ Session '%s' created successfully!", sessionName)))
+	fmt.Printf("   %s %s\n", ui.ColorBold+"Cookies:"+ui.ColorReset, ui.ColorWhite+fmt.Sprintf("%d", len(cookies))+ui.ColorReset)
 	if !session.ExpiresAt.IsZero() {
-		fmt.Printf("   Expires: %s\n", session.ExpiresAt.Format(time.RFC1123))
+		fmt.Printf("   %s %s\n", ui.ColorBold+"Expires:"+ui.ColorReset, ui.ColorWhite+session.ExpiresAt.Format(time.RFC1123)+ui.ColorReset)
 	}
-	fmt.Printf("\nUse with:\n")
-	fmt.Printf("  crawl get <url> --session=%s\n", sessionName)
-	fmt.Printf("  crawl media <url> --session=%s\n\n", sessionName)
+	fmt.Printf("\n%s\n", ui.Bold("Use with:"))
+	fmt.Printf("  %s %s\n", ui.ColorCyan+"crawl get <url> --session="+ui.ColorReset, ui.ColorWhite+sessionName+ui.ColorReset)
+	fmt.Printf("  %s %s\n\n", ui.ColorCyan+"crawl media <url> --session="+ui.ColorReset, ui.ColorWhite+sessionName+ui.ColorReset)
 
 	return nil
 }
 
 func importInteractive() ([]auth.Cookie, error) {
-	fmt.Println("📋 Cookie Import Guide:")
+	fmt.Println(ui.Bold("📋 Cookie Import Guide:"))
 	fmt.Println()
-	fmt.Println("1. Open the website in your browser and login")
-	fmt.Println("2. Press F12 to open DevTools")
-	fmt.Println("3. Go to: Application → Storage → Cookies")
-	fmt.Println("4. For each important cookie, copy the Name and Value")
+	fmt.Println(ui.Info("1. Open the website in your browser and login"))
+	fmt.Println(ui.Info("2. Press F12 to open DevTools"))
+	fmt.Println(ui.Info("3. Go to: Application → Storage → Cookies"))
+	fmt.Println(ui.Info("4. For each important cookie, copy the Name and Value"))
 	fmt.Println()
 
 	var cookies []auth.Cookie
@@ -167,7 +168,7 @@ func importInteractive() ([]auth.Cookie, error) {
 		}
 		value := strings.TrimSpace(scanner.Text())
 		if value == "" {
-			fmt.Println("⚠️  Skipping cookie with empty value")
+			fmt.Println(ui.Info("⚠️  Skipping cookie with empty value"))
 			continue
 		}
 
@@ -192,13 +193,13 @@ func importInteractive() ([]auth.Cookie, error) {
 		}
 
 		cookies = append(cookies, cookie)
-		fmt.Printf("✅ Added: %s (domain: %s)\n", cookie.Name, cookie.Domain)
+		fmt.Printf("%s %s (domain: %s)\n", ui.Success("✅ Added:"), ui.ColorWhite+cookie.Name+ui.ColorReset, ui.ColorWhite+cookie.Domain+ui.ColorReset)
 	}
 
 	if len(cookies) == 0 {
-		fmt.Println("\n⚠️  No cookies added")
+		fmt.Println("\n" + ui.Info("⚠️  No cookies added"))
 	} else {
-		fmt.Printf("\n✅ Total cookies added: %d\n", len(cookies))
+		fmt.Println("\n" + ui.Success(fmt.Sprintf("✅ Total cookies added: %d", len(cookies))))
 	}
 
 	return cookies, nil
