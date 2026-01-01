@@ -15,7 +15,6 @@ var (
 	ErrNetworkError    = errors.New("network error")
 	ErrParseError      = errors.New("failed to parse response")
 	ErrUnsupportedType = errors.New("unsupported content type")
-	ErrSessionNotFound = errors.New("session not found")
 	ErrCookieError     = errors.New("cookie processing error")
 )
 
@@ -29,7 +28,6 @@ const (
 	ErrCodeBrowserCrash ErrorCode = "BROWSER_CRASH"
 	ErrCodeNetworkError ErrorCode = "NETWORK_ERROR"
 	ErrCodeParseError   ErrorCode = "PARSE_ERROR"
-	ErrCodeSessionError ErrorCode = "SESSION_ERROR"
 )
 
 // EngineError wraps errors with additional context

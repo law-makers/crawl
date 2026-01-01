@@ -27,10 +27,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "crawl",
-	Short: "A fast and cross-platform CLI for scraping websites",
-	Long: `Crawl is a unified data extraction tool designed to scrape static sites, 
-SPAs, authenticated sessions, and rich media from social platforms.`,
+	Use:     "crawl",
+	Short:   "A fast and cross-platform CLI for scraping websites",
+	Long:    `Crawl is a unified data extraction tool designed to scrape static and SPA sites.`,
 	Version: "0.1.0",
 }
 
@@ -294,7 +293,7 @@ func customUsageFunc(cmd *cobra.Command) error {
 		printFlagsToStderr(cmd.LocalFlags().FlagUsages())
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%sUse \"%s%s%s %s--help%s\" for more information.%s\n\n",
+	fmt.Fprintf(os.Stderr, "\n%sUse \"%s%s%s %s--help%s\" for more information.%s\n",
 		ui.ColorDim,
 		ui.ColorCyan, cmd.CommandPath(), ui.ColorReset+ui.ColorDim,
 		ui.ColorGreen, ui.ColorReset+ui.ColorDim,

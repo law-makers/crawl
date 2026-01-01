@@ -329,5 +329,9 @@ func hashString(s string) string {
 	if hash < 0 {
 		hash = -hash
 	}
-	return fmt.Sprintf("%x", hash)[:8]
+	hex := fmt.Sprintf("%x", hash)
+	if len(hex) < 8 {
+		hex = strings.Repeat("0", 8-len(hex)) + hex
+	}
+	return hex[:8]
 }

@@ -21,12 +21,11 @@ import (
 )
 
 var (
-	mode        string
-	selector    string
-	output      string
-	headers     []string
-	sessionName string
-	fields      string
+	mode     string
+	selector string
+	output   string
+	headers  []string
+	fields   string
 )
 
 // getCmd represents the get command
@@ -63,7 +62,7 @@ func init() {
 	getCmd.Flags().StringVarP(&selector, "selector", "s", "body", "CSS selector to extract (e.g., .price, #content)")
 	getCmd.Flags().StringVarP(&output, "output", "o", "", "File path to save output (supports .json, .txt, .html, .csv, .md)")
 	getCmd.Flags().StringArrayVarP(&headers, "header", "H", []string{}, "Custom headers (e.g., -H \"User-Agent: Bot\")")
-	getCmd.Flags().StringVar(&sessionName, "session", "", "Name of a saved auth session to use")
+
 	getCmd.Flags().StringVar(&fields, "fields", "", "Comma-separated fields for CSV export (e.g., name=.name,price=.price)")
 }
 
@@ -115,14 +114,13 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	// Build request options
 	opts := models.RequestOptions{
-		URL:         url,
-		Mode:        scraperMode,
-		Selector:    selector,
-		Fields:      fieldsMap,
-		Headers:     headerMap,
-		SessionName: sessionName,
-		Timeout:     30 * time.Second,
-		Proxy:       proxy, // Global proxy flag
+		URL:      url,
+		Mode:     scraperMode,
+		Selector: selector,
+		Fields:   fieldsMap,
+		Headers:  headerMap,
+		Timeout:  30 * time.Second,
+		Proxy:    proxy, // Global proxy flag
 	}
 
 	// Parse timeout from global flag
@@ -239,42 +237,42 @@ func saveOutput(data *models.PageData, pathStr string) error {
 
 // printMetadataSummary prints key metadata fields from PageData using colors and aligns columns
 func printMetadataSummary(data *models.PageData) {
-    labelStyled := func(s string) string { return ui.ColorBold + s + ui.ColorReset }
-    valStyled := func(s string) string { return ui.ColorWhite + s + ui.ColorReset }
+	labelStyled := func(s string) string { return ui.ColorBold + s + ui.ColorReset }
+	valStyled := func(s string) string { return ui.ColorWhite + s + ui.ColorReset }
 
-    // 1. Define the rows structure and populate data
-    // We do this first so we can iterate over it to find the max width
-    rows := []struct {
-        Label string
-        Value string
-    }{
-        {"URL", data.URL},
-        {"Status", fmt.Sprintf("%d", data.StatusCode)},
-        {"Title", data.Title},
-        {"Response Time", fmt.Sprintf("%dms", data.ResponseTime)},
-        {"Links", fmt.Sprintf("%d", len(data.Links))},
-        {"Images", fmt.Sprintf("%d", len(data.Images))},
-        {"Scripts", fmt.Sprintf("%d", len(data.Scripts))},
-    }
+	// 1. Define the rows structure and populate data
+	// We do this first so we can iterate over it to find the max width
+	rows := []struct {
+		Label string
+		Value string
+	}{
+		{"URL", data.URL},
+		{"Status", fmt.Sprintf("%d", data.StatusCode)},
+		{"Title", data.Title},
+		{"Response Time", fmt.Sprintf("%dms", data.ResponseTime)},
+		{"Links", fmt.Sprintf("%d", len(data.Links))},
+		{"Images", fmt.Sprintf("%d", len(data.Images))},
+		{"Scripts", fmt.Sprintf("%d", len(data.Scripts))},
+	}
 
-    // 2. Calculate the maximum label width dynamically
-    var maxLen int
-    for _, r := range rows {
-        if len(r.Label) > maxLen {
-            maxLen = len(r.Label)
-        }
-    }
+	// 2. Calculate the maximum label width dynamically
+	var maxLen int
+	for _, r := range rows {
+		if len(r.Label) > maxLen {
+			maxLen = len(r.Label)
+		}
+	}
 
-    // 3. Print with alignment
-    fmt.Printf("\n")
-    for _, r := range rows {
-        // Calculate padding needed to reach maxLen
-        pad := strings.Repeat(" ", maxLen-len(r.Label))
-        
-        // Print: Label + Padding + " : " + Value
-        fmt.Printf("%s%s : %s\n", labelStyled(r.Label), pad, valStyled(r.Value))
-    }
-    fmt.Printf("\n")
+	// 3. Print with alignment
+	fmt.Printf("\n")
+	for _, r := range rows {
+		// Calculate padding needed to reach maxLen
+		pad := strings.Repeat(" ", maxLen-len(r.Label))
+
+		// Print: Label + Padding + " : " + Value
+		fmt.Printf("%s%s : %s\n", labelStyled(r.Label), pad, valStyled(r.Value))
+	}
+	fmt.Printf("\n")
 }
 
 // terminalHyperlink returns an OSC 8 hyperlink if supported, falling back to plain path

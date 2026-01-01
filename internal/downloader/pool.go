@@ -3,6 +3,8 @@ package downloader
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -99,18 +101,12 @@ func (wp *WorkerPool) DownloadBatch(ctx context.Context, urls []string, opts Dow
 // worker processes download jobs from the jobs channel
 func (wp *WorkerPool) worker(ctx context.Context, id int, jobs <-chan string, results chan<- *DownloadResult, opts DownloadOptions, wg *sync.WaitGroup, bar *progressbar.ProgressBar) {
 	defer wg.Done()
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().Int("worker_id", id).Interface("panic", r).Msg("Worker panicked")
-			if bar != nil {
-				bar.Add(1) // Ensure progress continues even on panic
-			}
-		}
-	}()
 
 	log.Debug().Int("worker_id", id).Msg("Worker started")
 
 	for url := range jobs {
+		currentURL := url
+
 		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
@@ -119,32 +115,62 @@ func (wp *WorkerPool) worker(ctx context.Context, id int, jobs <-chan string, re
 		default:
 		}
 
-		log.Debug().
-			Int("worker_id", id).
-			Str("url", url).
-			Msg("Worker processing download")
+		// Process each job inside its own recover-protected function so a panic doesn't kill the worker
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// Capture stack trace for diagnostics and emit a short error message for normal runs.
+					stack := debug.Stack()
+					// Emit a concise error at ERROR level so the console remains readable. Full stack trace goes to DEBUG only.
+					log.Error().Int("worker_id", id).Str("url", currentURL).Str("panic", fmt.Sprintf("%v", r)).Msg("Worker panicked; enabling debug logs will show full stack")
+					// Log the full stack at DEBUG level for diagnostics
+					log.Debug().Bytes("stack", stack).Msg("Worker panic stack trace")
 
-		// Apply rate limiting before download
-		if wp.rateLimiter != nil {
-			if err := wp.rateLimiter.Wait(ctx, url); err != nil {
-				log.Warn().Err(err).Str("url", url).Msg("Rate limit error")
+					// Safely advance progress bar if available. Protect bar.Add from causing additional panics.
+					if bar != nil {
+						func() {
+							defer func() { recover() }()
+							bar.Add(1)
+						}()
+					}
+
+					// Ensure we produce a failed result for the current URL so callers receive a result for every job.
+					if results != nil {
+						func() {
+							defer func() { recover() }()
+							results <- &DownloadResult{URL: currentURL, Success: false, Error: fmt.Errorf("worker panic: %v", r)}
+						}()
+					}
+				}
+			}()
+
+			log.Debug().
+				Int("worker_id", id).
+				Str("url", url).
+				Msg("Worker processing download")
+
+			// Apply rate limiting before download
+			if wp.rateLimiter != nil {
+				if err := wp.rateLimiter.Wait(ctx, url); err != nil {
+					log.Warn().Err(err).Str("url", url).Msg("Rate limit error")
+				}
 			}
-		}
 
-		// Download the file
-		result := wp.downloader.Download(ctx, url, opts)
+			// Download the file
+			result := wp.downloader.Download(ctx, url, opts)
 
-		// Update progress bar
-		if bar != nil {
-			bar.Add(1)
-		}
+			// Update progress bar
+			if bar != nil {
+				bar.Add(1)
+			}
 
-		// Send result back
-		select {
-		case results <- result:
-		case <-ctx.Done():
-			return
-		}
+			// Send result back
+			select {
+			case results <- result:
+			case <-ctx.Done():
+				return
+			}
+		}()
 	}
 
 	log.Debug().Int("worker_id", id).Msg("Worker finished")

@@ -98,6 +98,37 @@ func TestWorkerPool_Concurrency(t *testing.T) {
 	}
 }
 
+func TestWorkerPool_RecoversFromWorkerPanic(t *testing.T) {
+	// Create a pool with a nil downloader to force a nil pointer deref panic inside the worker
+	pool := &WorkerPool{
+		downloader:  nil,
+		concurrency: 2,
+		rateLimiter: nil,
+	}
+
+	urls := []string{"http://example.com/1.jpg", "http://example.com/2.jpg", "http://example.com/3.jpg"}
+	tmp := t.TempDir()
+	results := pool.DownloadBatch(context.Background(), urls, DownloadOptions{OutputDir: tmp})
+
+	if len(results) != len(urls) {
+		t.Fatalf("Expected %d results, got %d", len(urls), len(results))
+	}
+
+	failedCount := 0
+	for _, r := range results {
+		if !r.Success {
+			failedCount++
+			if r.Error == nil || !strings.Contains(r.Error.Error(), "worker panic") {
+				t.Errorf("Expected worker panic error, got: %v", r.Error)
+			}
+		}
+	}
+
+	if failedCount == 0 {
+		t.Errorf("Expected at least one failed result due to worker panic")
+	}
+}
+
 func BenchmarkSanitizeFilename(b *testing.B) {
 	input := "https://example.com/path/to/file.mp4?query=param"
 	u, _ := url.Parse(input)
@@ -105,5 +136,15 @@ func BenchmarkSanitizeFilename(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		sanitizeFilename(input, u)
+	}
+}
+
+func TestHashString_Length(t *testing.T) {
+	cases := []string{"", "a", "short", "withquery=1"}
+	for _, c := range cases {
+		h := hashString(c)
+		if len(h) != 8 {
+			t.Fatalf("hashString(%q) length = %d, want 8", c, len(h))
+		}
 	}
 }
