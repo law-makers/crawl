@@ -4,12 +4,9 @@ package static
 import (
 	"fmt"
 	"net/http"
-	"net/http/cookiejar"
-	"net/url"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/law-makers/crawl/internal/auth"
 	"github.com/law-makers/crawl/internal/cache"
 	"github.com/law-makers/crawl/internal/engine/metadata"
 	"github.com/law-makers/crawl/internal/ratelimit"
@@ -62,46 +59,6 @@ func (s *Scraper) fetch(opts models.RequestOptions) (*models.PageData, *goquery.
 		Str("scraper", s.Name()).
 		Msg("Starting fetch")
 
-	// Load session if specified
-	if opts.SessionName != "" {
-		log.Debug().Str("session", opts.SessionName).Msg("Loading session")
-		session, err := auth.LoadSession(opts.SessionName)
-		if err != nil {
-			log.Warn().Err(err).Str("session", opts.SessionName).Msg("Failed to load session")
-		} else {
-			// Inject cookies into client
-			jar, err := cookiejar.New(nil)
-			if err == nil {
-				parsedURL, _ := url.Parse(opts.URL)
-				var cookies []*http.Cookie
-				for _, c := range session.Cookies {
-					cookies = append(cookies, &http.Cookie{
-						Name:     c.Name,
-						Value:    c.Value,
-						Domain:   c.Domain,
-						Path:     c.Path,
-						Expires:  time.Unix(int64(c.Expires), 0),
-						HttpOnly: c.HTTPOnly,
-						Secure:   c.Secure,
-					})
-				}
-				jar.SetCookies(parsedURL, cookies)
-				s.client.Jar = jar
-				log.Debug().Int("cookies", len(cookies)).Msg("Session cookies injected")
-			}
-
-			// Add session headers
-			if len(session.Headers) > 0 {
-				if opts.Headers == nil {
-					opts.Headers = make(map[string]string)
-				}
-				for key, value := range session.Headers {
-					opts.Headers[key] = value
-				}
-			}
-		}
-	}
-
 	// Create request
 	req, err := http.NewRequest("GET", opts.URL, nil)
 	if err != nil {
@@ -129,6 +86,12 @@ func (s *Scraper) fetch(opts models.RequestOptions) (*models.PageData, *goquery.
 		return nil, nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// If caller requested a wait after load, sleep briefly after receiving response
+	if opts.WaitSeconds > 0 {
+		log.Debug().Int("wait_seconds", opts.WaitSeconds).Msg("Waiting after response before parsing (static)")
+		time.Sleep(time.Duration(opts.WaitSeconds) * time.Second)
+	}
 
 	// Parse HTML with goquery
 	doc, err := goquery.NewDocumentFromReader(resp.Body)

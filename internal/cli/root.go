@@ -27,10 +27,9 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "crawl",
-	Short: "A fast and cross-platform CLI for scraping websites",
-	Long: `Crawl is a unified data extraction tool designed to scrape static sites, 
-SPAs, authenticated sessions, and rich media from social platforms.`,
+	Use:     "crawl",
+	Short:   "A fast and cross-platform CLI for scraping websites",
+	Long:    `Crawl is a unified data extraction tool designed to scrape static and SPA sites.`,
 	Version: "0.1.0",
 }
 

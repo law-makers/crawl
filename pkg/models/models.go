@@ -51,7 +51,6 @@ type RequestOptions struct {
 	Selector    string
 	Fields      map[string]string
 	Headers     map[string]string
-	SessionName string
 	Timeout     time.Duration
 	Proxy       string
 	WaitSeconds int // Number of seconds to wait after browser opens before scraping

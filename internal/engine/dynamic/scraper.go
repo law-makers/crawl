@@ -7,10 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-	"github.com/law-makers/crawl/internal/auth"
 	"github.com/law-makers/crawl/internal/cache"
 	"github.com/law-makers/crawl/internal/ratelimit"
 	"github.com/law-makers/crawl/pkg/models"
@@ -150,44 +148,6 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 		log.Debug().Dur("elapsed_ms", time.Since(start)).Msg("Created new browser context (fallback)")
 	}
 
-	// Load session if specified and inject cookies before navigation
-	var sessionCookies []*network.CookieParam
-	if opts.SessionName != "" {
-		log.Debug().Str("session", opts.SessionName).Msg("Loading session")
-		session, err := auth.LoadSession(opts.SessionName)
-		if err != nil {
-			log.Warn().Err(err).Str("session", opts.SessionName).Msg("Failed to load session")
-		} else {
-			// Convert auth cookies to chromedp cookie format
-			for _, c := range session.Cookies {
-				cookie := &network.CookieParam{
-					Name:     c.Name,
-					Value:    c.Value,
-					Domain:   c.Domain,
-					Path:     c.Path,
-					HTTPOnly: c.HTTPOnly,
-					Secure:   c.Secure,
-				}
-				if c.Expires > 0 {
-					// Convert Unix timestamp to cdp.TimeSinceEpoch
-					t := time.Unix(int64(c.Expires), 0)
-					expires := cdp.TimeSinceEpoch(t)
-					cookie.Expires = &expires
-				}
-				switch c.SameSite {
-				case "Strict":
-					cookie.SameSite = network.CookieSameSiteStrict
-				case "Lax":
-					cookie.SameSite = network.CookieSameSiteLax
-				case "None":
-					cookie.SameSite = network.CookieSameSiteNone
-				}
-				sessionCookies = append(sessionCookies, cookie)
-			}
-			log.Debug().Int("cookies", len(sessionCookies)).Msg("Session cookies prepared")
-		}
-	}
-
 	// Build PageData
 	pageData := &models.PageData{
 		URL:       opts.URL,
@@ -233,18 +193,17 @@ func (d *Scraper) Fetch(opts models.RequestOptions) (*models.PageData, error) {
 	// Build task list
 	tasks := []chromedp.Action{network.Enable()}
 
-	// Inject session cookies before navigation
-	if len(sessionCookies) > 0 {
-		tasks = append(tasks, network.SetCookies(sessionCookies))
-	}
-
 	// Execute navigation and content extraction
 	tasks = append(tasks,
 		chromedp.Navigate(opts.URL),
-		// Just wait for DOM to be ready, not for specific selectors
+		// Wait a short initial period and any user-specified wait (opts.WaitSeconds)
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Small sleep to let initial JS execute
 			time.Sleep(300 * time.Millisecond)
+			if opts.WaitSeconds > 0 {
+				log.Debug().Int("wait_seconds", opts.WaitSeconds).Msg("Waiting after navigation before scraping (dynamic)")
+				time.Sleep(time.Duration(opts.WaitSeconds) * time.Second)
+			}
 			return nil
 		}),
 		chromedp.Title(&title),

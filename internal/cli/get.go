@@ -21,12 +21,11 @@ import (
 )
 
 var (
-	mode        string
-	selector    string
-	output      string
-	headers     []string
-	sessionName string
-	fields      string
+	mode     string
+	selector string
+	output   string
+	headers  []string
+	fields   string
 )
 
 // getCmd represents the get command
@@ -63,7 +62,7 @@ func init() {
 	getCmd.Flags().StringVarP(&selector, "selector", "s", "body", "CSS selector to extract (e.g., .price, #content)")
 	getCmd.Flags().StringVarP(&output, "output", "o", "", "File path to save output (supports .json, .txt, .html, .csv, .md)")
 	getCmd.Flags().StringArrayVarP(&headers, "header", "H", []string{}, "Custom headers (e.g., -H \"User-Agent: Bot\")")
-	getCmd.Flags().StringVar(&sessionName, "session", "", "Name of a saved auth session to use")
+
 	getCmd.Flags().StringVar(&fields, "fields", "", "Comma-separated fields for CSV export (e.g., name=.name,price=.price)")
 }
 
@@ -115,14 +114,13 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	// Build request options
 	opts := models.RequestOptions{
-		URL:         url,
-		Mode:        scraperMode,
-		Selector:    selector,
-		Fields:      fieldsMap,
-		Headers:     headerMap,
-		SessionName: sessionName,
-		Timeout:     30 * time.Second,
-		Proxy:       proxy, // Global proxy flag
+		URL:      url,
+		Mode:     scraperMode,
+		Selector: selector,
+		Fields:   fieldsMap,
+		Headers:  headerMap,
+		Timeout:  30 * time.Second,
+		Proxy:    proxy, // Global proxy flag
 	}
 
 	// Parse timeout from global flag
